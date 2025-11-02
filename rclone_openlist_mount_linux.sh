@@ -505,45 +505,16 @@ mount_webdav() {
         info_log "配置文件存在，尝试直接挂载..."
     fi
     
-    # 执行挂载命令 - 使用openlist remote（最小化参数以最大化兼容性）
+    # 执行简化的挂载命令
     info_log "执行挂载命令..."
     
-    # 保存挂载命令用于日志和调试
-    MOUNT_CMD="rclone mount openlist: \"$MOUNT_POINT\" --umask 0000 --allow-other --allow-non-empty"
-    info_log "挂载命令: $MOUNT_CMD"
+    # 简化挂载逻辑，使用最基础的参数
+    rclone mount openlist: "$MOUNT_POINT" \
+        --umask 0000 \
+        --allow-non-empty \
+        --daemon >> "$LOG_FILE" 2>&1
     
-    # 首先不使用--daemon参数，直接在前台运行以获取详细错误信息
-    info_log "尝试非守护进程模式挂载以获取详细错误信息..."
-    $MOUNT_CMD --verbose --verbose > /tmp/rclone_mount_debug.log 2>&1 &
-    
-    # 给进程一点时间尝试挂载
-    sleep 5
-    
-    # 检查是否挂载成功
-    if mount | grep -q "$MOUNT_POINT"; then
-        info_log "非守护进程模式挂载成功，现在终止该进程并使用守护进程模式重新挂载..."
-        # 杀掉非守护进程模式的rclone
-        pkill -f "rclone mount openlist:" || true
-        sleep 2
-        
-        # 使用守护进程模式挂载
-        $MOUNT_CMD --daemon >> "$LOG_FILE" 2>&1
-        MOUNT_RESULT=$?
-    else
-        # 非守护进程模式也失败了，检查日志
-        info_log "非守护进程模式挂载失败，查看调试日志..."
-        cat /tmp/rclone_mount_debug.log >> "$LOG_FILE"
-        
-        # 尝试使用--allow-other的替代方案
-        info_log "尝试不使用--allow-other参数..."
-        rclone mount openlist: "$MOUNT_POINT" \
-            --umask 0000 \
-            --allow-non-empty \
-            --daemon >> "$LOG_FILE" 2>&1
-        MOUNT_RESULT=$?
-    fi
-    
-    # 获取最终返回值
+    # 获取返回值
     MOUNT_RESULT=$?
     
     # 检查挂载是否成功
@@ -563,20 +534,10 @@ mount_webdav() {
             fi
             # 尝试获取更多错误信息
         info_log "尝试获取更详细的挂载错误信息..."
-        # 检查FUSE配置
-        info_log "检查FUSE配置..."
-        cat /etc/fuse.conf 2>/dev/null >> "$LOG_FILE" || echo "无法读取FUSE配置文件" >> "$LOG_FILE"
-        
-        # 检查FUSE模块加载状态
-        info_log "检查FUSE模块加载状态..."
-        lsmod | grep -i fuse >> "$LOG_FILE" 2>&1 || echo "FUSE模块可能未加载" >> "$LOG_FILE"
-        
-        # 尝试使用最基础的参数挂载
-        info_log "尝试最基础的挂载参数..."
         rclone mount openlist: "$MOUNT_POINT" \
             --umask 0000 \
             --allow-non-empty \
-            --verbose --verbose >> "$LOG_FILE" 2>&1 &
+            --verbose >> "$LOG_FILE" 2>&1 &
             
             # 给进程一点时间输出错误
             sleep 2
@@ -587,40 +548,21 @@ mount_webdav() {
         fi
     else
         error_log "挂载命令执行失败，返回码: $MOUNT_RESULT"
-        # 尝试不带--daemon参数运行一次，获取详细错误信息
+        # 简化错误处理
         info_log "尝试不带daemon模式运行以获取详细错误..."
-        # 检查挂载点权限
-        info_log "检查挂载点权限..."
-        ls -la "$(dirname "$MOUNT_POINT")" >> "$LOG_FILE" 2>&1
-        
-        # 尝试直接以当前用户权限挂载
-        info_log "尝试直接以当前用户权限挂载..."
         rclone mount openlist: "$MOUNT_POINT" \
             --umask 0000 \
             --allow-non-empty \
-            --verbose --verbose >> "$LOG_FILE" 2>&1 &
+            --verbose >> "$LOG_FILE" 2>&1 &
         
         # 给进程一点时间输出错误
         sleep 2
         # 杀掉测试进程
         pkill -f "rclone mount openlist:" || true
         
-        # 检查fuse相关问题
+        # 简化检查
         if ! check_command fusermount; then
             warning_log "未找到fusermount命令，可能是fuse安装不完整"
-            # 尝试查找fusermount的其他可能位置
-            find /bin /usr/bin /sbin /usr/sbin -name "fusermount*" >> "$LOG_FILE" 2>&1 || echo "未找到fusermount相关命令" >> "$LOG_FILE"
-        else
-            # 检查fusermount权限
-            info_log "检查fusermount权限..."
-            ls -la $(which fusermount) >> "$LOG_FILE" 2>&1
-        fi
-        
-        # 添加更多诊断信息
-        info_log "系统信息诊断..."
-        uname -a >> "$LOG_FILE" 2>&1
-        id >> "$LOG_FILE" 2>&1
-        mount | grep fuse >> "$LOG_FILE" 2>&1 || echo "无FUSE挂载点" >> "$LOG_FILE"
         
         return 1
     fi
@@ -634,7 +576,7 @@ setup_autostart() {
     AUTOSTART_SCRIPT="/etc/init.d/rclone_openlist"
 
     if [ "$OS" = "OpenWrt" ] || [ "$OS" = "飞牛OS" ]; then
-        # OpenWrt/飞牛OS使用procd
+        # OpenWrt/飞牛OS使用procd - 简化版本
         cat > "$AUTOSTART_SCRIPT" << EOF
 #!/bin/sh /etc/rc.common
 
@@ -643,18 +585,10 @@ STOP=10
 
 start() {
     sleep 30
-    # 先尝试基础版本（无--allow-other）以增加兼容性
     $(command -v rclone) mount openlist: "$MOUNT_POINT" \
         --umask 0000 \
         --allow-non-empty \
-        --daemon || {
-        # 如果失败，尝试添加--allow-other
-        $(command -v rclone) mount openlist: "$MOUNT_POINT" \
-            --umask 0000 \
-            --allow-other \
-            --allow-non-empty \
-            --daemon
-    }
+        --daemon
 }
 
 stop() {
@@ -697,25 +631,17 @@ EOF
             systemctl daemon-reload
             systemctl enable rclone-openlist.service
         else
-            # 使用init.d
-            cat > "$AUTOSTART_SCRIPT" << EOF
+            # 使用init.d - 简化版本
+        cat > "$AUTOSTART_SCRIPT" << EOF
 #!/bin/bash
 
 case "\$1" in
     start)
         sleep 30
-        # 使用简化的参数集以提高兼容性
         $(command -v rclone) mount openlist: "$MOUNT_POINT" \
             --umask 0000 \
             --allow-non-empty \
-            --daemon || {
-            # 如果失败，尝试添加--allow-other
-            $(command -v rclone) mount openlist: "$MOUNT_POINT" \
-                --umask 0000 \
-                --allow-other \
-                --allow-non-empty \
-                --daemon
-        }
+            --daemon
         ;;
     stop)
         killall -9 rclone 2>/dev/null
@@ -744,9 +670,8 @@ EOF
         fi
     fi
     
-    # 额外的crontab保障机制 - 更新为使用openlist remote
-    # 更新crontab使用简化参数
-    CRONTAB_ENTRY="@reboot sleep 60 && /bin/bash -c '$(command -v rclone) mount openlist: \"$MOUNT_POINT\" --umask 0000 --allow-non-empty --daemon || $(command -v rclone) mount openlist: \"$MOUNT_POINT\" --umask 0000 --allow-other --allow-non-empty --daemon'"
+    # 简化的crontab保障机制
+    CRONTAB_ENTRY="@reboot sleep 60 && $(command -v rclone) mount openlist: \"$MOUNT_POINT\" --umask 0000 --allow-non-empty --daemon"
     
     # 检查crontab是否已存在该条目
     if ! crontab -l 2>/dev/null | grep -q "rclone mount openlist"; then
@@ -832,16 +757,9 @@ main() {
         exit 1
     fi
     
-    # 加密密码 - 确保在rclone安装后执行
-    # 简化处理，直接使用明文密码以兼容所有版本的rclone
+    # 直接使用明文密码，不做任何加密处理
     WEBDAV_PASS_ENCRYPTED="$WEBDAV_PASS"
-    info_log "使用明文密码以兼容所有版本的rclone"
-    
-    # 记录rclone版本信息到日志
-    if command -v rclone > /dev/null 2>&1; then
-        rclone_version=$(rclone version | grep 'rclone' | head -1)
-        info_log "rclone版本: $rclone_version"
-    fi
+    info_log "使用明文密码配置rclone"
     
     # 配置rclone
     if ! configure_rclone; then
