@@ -691,7 +691,7 @@ mount_webdav() {
         fi
     fi
     
-    # 尝试方式5：使用视频中的完整参数配置
+    # 尝试方式5：使用视频中的完整参数配置（使用动态变量确保一致性）
     info_log "挂载方式4失败，尝试挂载方式5：使用视频中的完整参数配置"
     # 确保进程已停止
     pkill -f "rclone mount openlist:" 2>/dev/null
@@ -701,14 +701,14 @@ mount_webdav() {
         --umask 0000 \
         --allow-non-empty \
         --allow-other \
-        --buffer-size 512M \
+        --buffer-size $DEFAULT_BUFFER_SIZE \
         --cache-dir "$CACHE_DIR" \
-        --vfs-cache-mode full \
+        --vfs-cache-mode $DEFAULT_VFS_CACHE_MODE \
         --vfs-fast-fingerprint \
         --file-perms 0777 \
         --copy-links \
         --multi-thread-streams 6 \
-        --header "Referer:https://alist.nn.ci" \
+        $HEADER_PARAM \
         --no-modtime \
         --daemon >> "$LOG_FILE" 2>&1
     
@@ -720,19 +720,39 @@ mount_webdav() {
         return 0
     fi
     
-    # 尝试方式6：使用--no-checksum参数（解决某些网络问题）
-    info_log "挂载方式5失败，尝试挂载方式6：使用--no-checksum参数"
+    # 尝试方式6：使用--no-checksum参数（解决某些网络问题），并应用系统优化参数
+    info_log "挂载方式5失败，尝试挂载方式6：使用--no-checksum参数（解决网络问题）"
     # 确保进程已停止
     pkill -f "rclone mount openlist:" 2>/dev/null
     sleep 2
     
-    rclone mount openlist: "$MOUNT_POINT" \
-        --umask 0000 \
-        --allow-non-empty \
-        --no-checksum \
-        $MULTI_THREAD_PARAM \
-        $HEADER_PARAM \
-        --daemon >> "$LOG_FILE" 2>&1
+    # 针对飞牛OS/OpenWrt系统，使用完整优化参数+--no-checksum
+    if [ "$OS" = "飞牛OS" ] || [ "$OS" = "OpenWrt" ]; then
+        rclone mount openlist: "$MOUNT_POINT" \
+            --umask 0000 \
+            --allow-non-empty \
+            --allow-other \
+            --buffer-size $DEFAULT_BUFFER_SIZE \
+            --cache-dir "$CACHE_DIR" \
+            --vfs-cache-mode $DEFAULT_VFS_CACHE_MODE \
+            --vfs-fast-fingerprint \
+            --file-perms 0777 \
+            --copy-links \
+            --multi-thread-streams 6 \
+            $HEADER_PARAM \
+            --no-checksum \
+            --no-modtime \
+            --daemon >> "$LOG_FILE" 2>&1
+    else
+        # 其他系统使用基础参数+--no-checksum
+        rclone mount openlist: "$MOUNT_POINT" \
+            --umask 0000 \
+            --allow-non-empty \
+            --no-checksum \
+            $MULTI_THREAD_PARAM \
+            $HEADER_PARAM \
+            --daemon >> "$LOG_FILE" 2>&1
+    fi
     
     # 等待挂载完成
     sleep 3
@@ -777,6 +797,19 @@ mount_webdav() {
     # 检查系统限制
     check_system_limits
     
+    # 特殊检查飞牛OS环境
+    if [ "$OS" = "飞牛OS" ]; then
+        error_log "飞牛OS特殊检查: 执行opkg update确保软件包源更新"
+        opkg update 2>> "$LOG_FILE" || {
+            warning_log "opkg update失败，可能需要更换软件包源"
+        }
+        
+        # 检查是否安装了fuse相关包
+        if ! opkg list-installed | grep -q "kmod-fuse"; then
+            error_log "未安装kmod-fuse，请运行: opkg install kmod-fuse"
+        fi
+    fi
+    
     # 提供更全面的备选挂载命令建议
     echo -e "${YELLOW}挂载失败后的备选方案:${NC}"
     echo -e "1. 手动尝试基本挂载命令:"
@@ -785,11 +818,13 @@ mount_webdav() {
     echo -e "   rclone mount openlist: '$MOUNT_POINT' --daemon --allow-root"
     echo -e "3. 尝试使用--allow-other参数:"
     echo -e "   rclone mount openlist: '$MOUNT_POINT' --daemon --allow-other"
-    echo -e "4. 先启用FUSE模块:"
+    echo -e "4. 飞牛OS用户推荐命令:"
+    echo -e "   rclone mount openlist: '$MOUNT_POINT' --daemon --allow-other --buffer-size 512M --vfs-cache-mode full --vfs-fast-fingerprint --file-perms 0777 --copy-links --header \"Referer:https://alist.nn.ci\" --no-checksum"
+    echo -e "5. 先启用FUSE模块:"
     echo -e "   sudo modprobe fuse"
-    echo -e "5. 确保FUSE配置正确:"
+    echo -e "6. 确保FUSE配置正确:"
     echo -e "   sudo sed -i 's/^#user_allow_other/user_allow_other/' /etc/fuse.conf"
-    echo -e "6. 详细错误信息已保存至: $LOG_FILE"
+    echo -e "7. 详细错误信息已保存至: $LOG_FILE"
     
     return 1
 }
@@ -1065,16 +1100,24 @@ start() {
         fi
     fi
     
-    # 尝试方式5：使用--no-checksum参数（解决网络问题）
+    # 尝试方式5：使用--no-checksum参数（解决网络问题），应用飞牛OS优化参数
     pkill -f "rclone mount openlist:" 2>/dev/null
     sleep 2
     
     $(command -v rclone) mount openlist: "$MOUNT_POINT" \
         --umask 0000 \
         --allow-non-empty \
-        --no-checksum \
+        --allow-other \
+        --buffer-size 512M \
+        --cache-dir "$CACHE_DIR" \
+        --vfs-cache-mode full \
+        --vfs-fast-fingerprint \
+        --file-perms 0777 \
+        --copy-links \
         --multi-thread-streams 6 \
         --header "Referer:https://alist.nn.ci" \
+        --no-checksum \
+        --no-modtime \
         --daemon
     
     sleep 5
@@ -1209,28 +1252,25 @@ ExecStart=/bin/bash -c "
             --daemon
     fi
     
-    # 尝试方式5：使用--no-checksum参数（解决网络问题）
+    # 尝试方式5：使用--no-checksum参数（解决网络问题），应用优化参数
     pkill -f 'rclone mount openlist:' 2>/dev/null
     sleep 2
     
     $(command -v rclone) mount openlist: '$MOUNT_POINT' \
         --umask 0000 \
         --allow-non-empty \
-        --no-checksum \
+        --allow-other \
+        --buffer-size 512M \
+        --cache-dir '$CACHE_DIR' \
+        --vfs-cache-mode full \
+        --vfs-fast-fingerprint \
+        --file-perms 0777 \
+        --copy-links \
         --multi-thread-streams 6 \
         --header "Referer:https://alist.nn.ci" \
+        --no-checksum \
+        --no-modtime \
         --daemon
-            pkill -f 'rclone mount openlist:' 2>/dev/null
-            sleep 2
-            
-            $(command -v rclone) mount openlist: '$MOUNT_POINT' \
-                --umask 0000 \
-                --allow-non-empty \
-                --no-checksum \
-                --multi-thread-streams 6 \
-                --header "Referer:https://alist.nn.ci" \
-                --daemon
-    fi
 "
 ExecStop=/bin/bash -c "
     # 卸载挂载点
@@ -1355,17 +1395,25 @@ start() {
         fi
     fi
     
-    # 尝试方式5：使用--no-checksum参数（解决网络问题）
-    echo "挂载方式4失败，尝试挂载方式5：使用--no-checksum参数..."
+    # 尝试方式5：使用--no-checksum参数（解决网络问题），应用飞牛OS优化参数
+    echo "挂载方式4失败，尝试挂载方式5：使用--no-checksum参数和优化配置..."
     pkill -f "rclone mount openlist:" 2>/dev/null || killall -9 rclone
     sleep 2
     
     $(command -v rclone) mount openlist: "$MOUNT_POINT" \
         --umask 0000 \
         --allow-non-empty \
-        --no-checksum \
+        --allow-other \
+        --buffer-size 512M \
+        --cache-dir "$CACHE_DIR" \
+        --vfs-cache-mode full \
+        --vfs-fast-fingerprint \
+        --file-perms 0777 \
+        --copy-links \
         --multi-thread-streams 6 \
         --header "Referer:https://alist.nn.ci" \
+        --no-checksum \
+        --no-modtime \
         --daemon
     
     sleep 5
