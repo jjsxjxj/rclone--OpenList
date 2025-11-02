@@ -556,6 +556,26 @@ mount_webdav() {
     mkdir -p "$CACHE_DIR" >> "$LOG_FILE" 2>&1
     chmod 700 "$CACHE_DIR" 2>/dev/null
     
+    # 根据系统类型设置不同的默认参数
+    if [ "$OS" = "飞牛OS" ] || [ "$OS" = "OpenWrt" ]; then
+        # 飞牛OS和OpenWrt系统使用更适合的参数
+        DEFAULT_BUFFER_SIZE="512M"
+        DEFAULT_VFS_CACHE_MODE="full"
+        ADDITIONAL_PARAMS="--vfs-fast-fingerprint --file-perms 0777 --copy-links"
+        # 添加header参数支持
+        HEADER_PARAM="--header \"Referer:https://alist.nn.ci\""
+        # 多线程参数
+        MULTI_THREAD_PARAM="--multi-thread-streams 6"
+        info_log "检测到$OS系统，使用优化参数配置"
+    else
+        # 其他系统使用常规参数
+        DEFAULT_BUFFER_SIZE="32M"
+        DEFAULT_VFS_CACHE_MODE="writes"
+        ADDITIONAL_PARAMS=""
+        HEADER_PARAM=""
+        MULTI_THREAD_PARAM=""
+    fi
+    
     # 执行挂载命令 - 尝试多种挂载方式
     info_log "执行挂载命令..."
     
@@ -596,30 +616,50 @@ mount_webdav() {
         return 0
     fi
     
-    # 方式2失败，尝试方式3：使用全部增强参数但不使用--allow-other
-    info_log "挂载方式2失败，尝试挂载方式3：使用增强参数但不使用--allow-other"
+    # 方式2失败，尝试方式3：使用系统优化参数配置
+    info_log "挂载方式2失败，尝试挂载方式3：使用系统优化参数配置"
     # 确保进程已停止
     pkill -f "rclone mount openlist:" 2>/dev/null
     sleep 2
     
-    rclone mount openlist: "$MOUNT_POINT" \
-        --umask 0000 \
-        --allow-non-empty \
-        --buffer-size 32M \
-        --cache-dir "$CACHE_DIR" \
-        --vfs-cache-mode writes \
-        --vfs-read-chunk-size 16M \
-        --vfs-read-chunk-size-limit 256M \
-        --low-level-retries 3 \
-        --no-modtime \
-        --poll-interval 0 \
-        --daemon >> "$LOG_FILE" 2>&1
+    # 构建挂载命令，根据系统类型动态调整参数
+    MOUNT_CMD="rclone mount openlist: \"$MOUNT_POINT\" \\
+        --umask 0000 \\
+        --allow-non-empty \\
+        --buffer-size $DEFAULT_BUFFER_SIZE \\
+        --cache-dir \"$CACHE_DIR\" \\
+        --vfs-cache-mode $DEFAULT_VFS_CACHE_MODE \\
+        $MULTI_THREAD_PARAM \\
+        --vfs-read-chunk-size 32M \\
+        --vfs-read-chunk-size-limit 256M \\
+        --low-level-retries 3 \\
+        --no-modtime \\
+        --poll-interval 0"
+    
+    # 添加header参数（如果有）
+    if [ -n "$HEADER_PARAM" ]; then
+        MOUNT_CMD="$MOUNT_CMD \\
+        $HEADER_PARAM"
+    fi
+    
+    # 添加附加参数（如果有）
+    if [ -n "$ADDITIONAL_PARAMS" ]; then
+        MOUNT_CMD="$MOUNT_CMD \\
+        $ADDITIONAL_PARAMS"
+    fi
+    
+    # 添加daemon参数
+    MOUNT_CMD="$MOUNT_CMD \\
+        --daemon"
+    
+    info_log "执行系统优化挂载命令"
+    eval $MOUNT_CMD >> "$LOG_FILE" 2>&1
     
     # 等待挂载完成
     sleep 3
     
     if mount | grep -q "$MOUNT_POINT"; then
-        success_log "WebDAV服务挂载成功！（使用增强参数但不使用--allow-other）"
+        success_log "WebDAV服务挂载成功！（使用系统优化参数）"
         return 0
     fi
     
@@ -634,6 +674,12 @@ mount_webdav() {
             --umask 0000 \
             --allow-non-empty \
             --allow-root \
+            --buffer-size $DEFAULT_BUFFER_SIZE \
+            --cache-dir "$CACHE_DIR" \
+            --vfs-cache-mode $DEFAULT_VFS_CACHE_MODE \
+            $MULTI_THREAD_PARAM \
+            $ADDITIONAL_PARAMS \
+            $HEADER_PARAM \
             --daemon >> "$LOG_FILE" 2>&1
         
         # 等待挂载完成
@@ -645,8 +691,37 @@ mount_webdav() {
         fi
     fi
     
-    # 尝试方式5：使用--no-checksum参数（解决某些网络问题）
-    info_log "挂载方式4失败，尝试挂载方式5：使用--no-checksum参数"
+    # 尝试方式5：使用视频中的完整参数配置
+    info_log "挂载方式4失败，尝试挂载方式5：使用视频中的完整参数配置"
+    # 确保进程已停止
+    pkill -f "rclone mount openlist:" 2>/dev/null
+    sleep 2
+    
+    rclone mount openlist: "$MOUNT_POINT" \
+        --umask 0000 \
+        --allow-non-empty \
+        --allow-other \
+        --buffer-size 512M \
+        --cache-dir "$CACHE_DIR" \
+        --vfs-cache-mode full \
+        --vfs-fast-fingerprint \
+        --file-perms 0777 \
+        --copy-links \
+        --multi-thread-streams 6 \
+        --header "Referer:https://alist.nn.ci" \
+        --no-modtime \
+        --daemon >> "$LOG_FILE" 2>&1
+    
+    # 等待挂载完成
+    sleep 3
+    
+    if mount | grep -q "$MOUNT_POINT"; then
+        success_log "WebDAV服务挂载成功！（使用视频中的完整参数）"
+        return 0
+    fi
+    
+    # 尝试方式6：使用--no-checksum参数（解决某些网络问题）
+    info_log "挂载方式5失败，尝试挂载方式6：使用--no-checksum参数"
     # 确保进程已停止
     pkill -f "rclone mount openlist:" 2>/dev/null
     sleep 2
@@ -655,6 +730,8 @@ mount_webdav() {
         --umask 0000 \
         --allow-non-empty \
         --no-checksum \
+        $MULTI_THREAD_PARAM \
+        $HEADER_PARAM \
         --daemon >> "$LOG_FILE" 2>&1
     
     # 等待挂载完成
@@ -936,23 +1013,28 @@ start() {
         return 0
     fi
     
-    # 方式2失败，尝试方式3：使用增强参数但不使用--allow-other
+    # 方式2失败，尝试方式3：使用飞牛OS优化参数（根据视频配置）
     pkill -f "rclone mount openlist:" 2>/dev/null
     sleep 2
     
     $(command -v rclone) mount openlist: "$MOUNT_POINT" \
         --umask 0000 \
         --allow-non-empty \
-        --buffer-size 32M \
+        --allow-other \
+        --buffer-size 512M \
         --cache-dir "$CACHE_DIR" \
-        --vfs-cache-mode writes \
-        --low-level-retries 3 \
+        --vfs-cache-mode full \
+        --vfs-fast-fingerprint \
+        --file-perms 0777 \
+        --copy-links \
+        --multi-thread-streams 6 \
+        --header "Referer:https://alist.nn.ci" \
         --no-modtime \
         --daemon
     
     sleep 5
     if mount | grep -q "$MOUNT_POINT"; then
-        echo "WebDAV服务挂载成功！（使用增强参数）"
+        echo "WebDAV服务挂载成功！（使用飞牛OS优化参数）"
         return 0
     fi
     
@@ -965,6 +1047,15 @@ start() {
             --umask 0000 \
             --allow-non-empty \
             --allow-root \
+            --buffer-size 512M \
+            --cache-dir "$CACHE_DIR" \
+            --vfs-cache-mode full \
+            --vfs-fast-fingerprint \
+            --file-perms 0777 \
+            --copy-links \
+            --multi-thread-streams 6 \
+            --header "Referer:https://alist.nn.ci" \
+            --no-modtime \
             --daemon
         
         sleep 5
@@ -972,6 +1063,24 @@ start() {
             echo "WebDAV服务挂载成功！（使用--allow-root参数）"
             return 0
         fi
+    fi
+    
+    # 尝试方式5：使用--no-checksum参数（解决网络问题）
+    pkill -f "rclone mount openlist:" 2>/dev/null
+    sleep 2
+    
+    $(command -v rclone) mount openlist: "$MOUNT_POINT" \
+        --umask 0000 \
+        --allow-non-empty \
+        --no-checksum \
+        --multi-thread-streams 6 \
+        --header "Referer:https://alist.nn.ci" \
+        --daemon
+    
+    sleep 5
+    if mount | grep -q "$MOUNT_POINT"; then
+        echo "WebDAV服务挂载成功！（使用--no-checksum参数）"
+        return 0
     fi
 }
 
@@ -1055,17 +1164,22 @@ ExecStart=/bin/bash -c "
         exit 0
     fi
     
-    # 方式2失败，尝试方式3：使用增强参数但不使用--allow-other
+    # 方式2失败，尝试方式3：使用优化参数配置
     pkill -f 'rclone mount openlist:' 2>/dev/null
     sleep 2
     
     $(command -v rclone) mount openlist: '$MOUNT_POINT' \
         --umask 0000 \
         --allow-non-empty \
-        --buffer-size 32M \
+        --allow-other \
+        --buffer-size 512M \
         --cache-dir '$CACHE_DIR' \
-        --vfs-cache-mode writes \
-        --low-level-retries 3 \
+        --vfs-cache-mode full \
+        --vfs-fast-fingerprint \
+        --file-perms 0777 \
+        --copy-links \
+        --multi-thread-streams 6 \
+        --header "Referer:https://alist.nn.ci" \
         --no-modtime \
         --daemon
     
@@ -1083,7 +1197,39 @@ ExecStart=/bin/bash -c "
             --umask 0000 \
             --allow-non-empty \
             --allow-root \
+            --buffer-size 512M \
+            --cache-dir '$CACHE_DIR' \
+            --vfs-cache-mode full \
+            --vfs-fast-fingerprint \
+            --file-perms 0777 \
+            --copy-links \
+            --multi-thread-streams 6 \
+            --header "Referer:https://alist.nn.ci" \
+            --no-modtime \
             --daemon
+    fi
+    
+    # 尝试方式5：使用--no-checksum参数（解决网络问题）
+    pkill -f 'rclone mount openlist:' 2>/dev/null
+    sleep 2
+    
+    $(command -v rclone) mount openlist: '$MOUNT_POINT' \
+        --umask 0000 \
+        --allow-non-empty \
+        --no-checksum \
+        --multi-thread-streams 6 \
+        --header "Referer:https://alist.nn.ci" \
+        --daemon
+            pkill -f 'rclone mount openlist:' 2>/dev/null
+            sleep 2
+            
+            $(command -v rclone) mount openlist: '$MOUNT_POINT' \
+                --umask 0000 \
+                --allow-non-empty \
+                --no-checksum \
+                --multi-thread-streams 6 \
+                --header "Referer:https://alist.nn.ci" \
+                --daemon
     fi
 "
 ExecStop=/bin/bash -c "
@@ -1155,30 +1301,35 @@ start() {
         return 0
     fi
     
-    # 方式2失败，尝试方式3：使用增强参数但不使用--allow-other
-    echo "挂载方式2失败，尝试挂载方式3：使用增强参数..."
+    # 方式2失败，尝试方式3：使用优化参数配置
+    echo "挂载方式2失败，尝试挂载方式3：使用优化参数配置..."
     pkill -f "rclone mount openlist:" 2>/dev/null || killall -9 rclone
     sleep 2
     
     $(command -v rclone) mount openlist: "$MOUNT_POINT" \
         --umask 0000 \
         --allow-non-empty \
-        --buffer-size 32M \
+        --allow-other \
+        --buffer-size 512M \
         --cache-dir "$CACHE_DIR" \
-        --vfs-cache-mode writes \
-        --low-level-retries 3 \
+        --vfs-cache-mode full \
+        --vfs-fast-fingerprint \
+        --file-perms 0777 \
+        --copy-links \
+        --multi-thread-streams 6 \
+        --header "Referer:https://alist.nn.ci" \
         --no-modtime \
         --daemon
     
     sleep 5
     if mount | grep -q "$MOUNT_POINT"; then
-        echo "WebDAV服务挂载成功！（使用增强参数）"
+        echo "WebDAV服务挂载成功！（使用优化参数）"
         return 0
     fi
     
     # 尝试方式4：使用--allow-root（仅root用户）
     if [ \$(id -u) -eq 0 ]; then
-        echo "挂载方式3失败，尝试挂载方式4：使用--allow-root..."
+        echo "挂载方式3失败，尝试挂载方式4：使用--allow-root和优化参数..."
         pkill -f "rclone mount openlist:" 2>/dev/null || killall -9 rclone
         sleep 2
         
@@ -1186,16 +1337,45 @@ start() {
             --umask 0000 \
             --allow-non-empty \
             --allow-root \
+            --buffer-size 512M \
+            --cache-dir "$CACHE_DIR" \
+            --vfs-cache-mode full \
+            --vfs-fast-fingerprint \
+            --file-perms 0777 \
+            --copy-links \
+            --multi-thread-streams 6 \
+            --header "Referer:https://alist.nn.ci" \
+            --no-modtime \
             --daemon
         
         sleep 5
         if mount | grep -q "$MOUNT_POINT"; then
-            echo "WebDAV服务挂载成功！（使用--allow-root参数）"
+            echo "WebDAV服务挂载成功！（使用--allow-root和优化参数）"
             return 0
         fi
     fi
     
-    echo "警告：所有挂载尝试都失败，将定期重试"
+    # 尝试方式5：使用--no-checksum参数（解决网络问题）
+    echo "挂载方式4失败，尝试挂载方式5：使用--no-checksum参数..."
+    pkill -f "rclone mount openlist:" 2>/dev/null || killall -9 rclone
+    sleep 2
+    
+    $(command -v rclone) mount openlist: "$MOUNT_POINT" \
+        --umask 0000 \
+        --allow-non-empty \
+        --no-checksum \
+        --multi-thread-streams 6 \
+        --header "Referer:https://alist.nn.ci" \
+        --daemon
+    
+    sleep 5
+    if mount | grep -q "$MOUNT_POINT"; then
+        echo "WebDAV服务挂载成功！（使用--no-checksum参数）"
+        return 0
+    fi
+    
+    echo "警告：所有挂载尝试都失败，请检查网络连接和配置"
+    echo "推荐手动尝试：$(command -v rclone) mount openlist: "$MOUNT_POINT" --umask 0000 --allow-non-empty --allow-other --buffer-size 512M --cache-dir "$CACHE_DIR" --vfs-cache-mode full --vfs-fast-fingerprint --file-perms 0777 --copy-links --multi-thread-streams 6 --header \"Referer:https://alist.nn.ci\" --no-modtime --daemon"
 }
 
 stop() {
