@@ -297,16 +297,21 @@ install_dependencies() {
     fi
     
     # 安装fuse相关包（尝试fuse3，失败则尝试fuse）
-    if [ "$OS" = "Debian" ] || [ "$OS" = "Fedora" ] || [ "$OS" = "Arch" ]; then
-        install_single_dependency "fuse3" "fuse3" || {
-            warning_log "fuse3安装失败，尝试fuse..."
-            install_single_dependency "fusermount" "fuse" || {
-                warning_log "fuse安装也失败，将在后续操作中处理"
-            }
+    # 优先安装fusermount作为最基础的FUSE依赖，确保兼容性
+    if [ "$OS" = "飞牛OS" ] || [ "$OS" = "OpenWrt" ]; then
+        # 对于特殊系统，直接尝试安装基础fuse包
+        warning_log "特殊系统检测：$OS，优先安装基础fuse包..."
+        install_single_dependency "fusermount" "fuse-utils" "fuse" || {
+            warning_log "fuse安装失败，将尝试其他方式或继续运行"
+            # 即使安装失败，也继续运行，因为某些系统可能内置了fusermount
         }
     else
-        install_single_dependency "fusermount" "fuse" || {
-            warning_log "fuse安装失败，将在后续操作中处理"
+        # 其他系统先尝试fusermount
+        install_single_dependency "fusermount" "fuse" "fuse-utils" || {
+            warning_log "fuse安装失败，尝试fuse3..."
+            install_single_dependency "fuse3" "fuse3" || {
+                warning_log "fuse3安装也失败，将继续运行"
+            }
         }
     fi
     
@@ -500,15 +505,12 @@ mount_webdav() {
         info_log "配置文件存在，尝试直接挂载..."
     fi
     
-    # 执行挂载命令 - 使用openlist remote（简化参数以提高兼容性）
+    # 执行挂载命令 - 使用openlist remote（最小化参数以最大化兼容性）
     info_log "执行挂载命令..."
     rclone mount openlist: "$MOUNT_POINT" \
         --umask 0000 \
-        --default-permissions \
         --allow-other \
-        --dir-cache-time 6h \
-        --low-level-retries 10 \
-        --log-level INFO \
+        --allow-non-empty \
         --daemon >> "$LOG_FILE" 2>&1
     
     # 获取返回值
@@ -533,11 +535,8 @@ mount_webdav() {
             info_log "尝试获取更详细的挂载错误信息..."
             rclone mount openlist: "$MOUNT_POINT" \
                 --umask 0000 \
-                --default-permissions \
-                --allow-non-empty \
                 --allow-other \
-                --dir-cache-time 6h \
-                --low-level-retries 10 \
+                --allow-non-empty \
                 --verbose --verbose >> "$LOG_FILE" 2>&1 &
             
             # 给进程一点时间输出错误
@@ -553,11 +552,8 @@ mount_webdav() {
         info_log "尝试不带daemon模式运行以获取详细错误..."
         rclone mount openlist: "$MOUNT_POINT" \
             --umask 0000 \
-            --default-permissions \
-            --allow-non-empty \
             --allow-other \
-            --dir-cache-time 6h \
-            --low-level-retries 10 \
+            --allow-non-empty \
             --verbose --verbose >> "$LOG_FILE" 2>&1 &
         
         # 给进程一点时间输出错误
@@ -593,11 +589,8 @@ start() {
     sleep 30
     $(command -v rclone) mount openlist: "$MOUNT_POINT" \
         --umask 0000 \
-        --default-permissions \
-        --allow-non-empty \
         --allow-other \
-        --dir-cache-time 6h \
-        --low-level-retries 10 \
+        --allow-non-empty \
         --daemon
 }
 
@@ -631,12 +624,8 @@ User=$(whoami)
 ExecStartPre=/bin/sleep 30
 ExecStart=$(command -v rclone) mount openlist: "$MOUNT_POINT" \
     --umask 0000 \
-    --default-permissions \
-    --allow-non-empty \
     --allow-other \
-    --dir-cache-time 6h \
-    --low-level-retries 10 \
-    --log-level INFO
+    --allow-non-empty
 Restart=on-failure
 RestartSec=5
 
