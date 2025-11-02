@@ -11,11 +11,23 @@ YELLOW='\033[0;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# 日志文件路径
+# 全局变量
 LOG_FILE="$(pwd)/rclone_openlist_setup.log"
+OS="Unknown"
+VER="Unknown"
+WEBDAV_URL=""
+WEBDAV_USER=""
+WEBDAV_PASS=""
+WEBDAV_PASS_ENCRYPTED=""
+MOUNT_POINT="/mnt/openlist"
+CHUNK_SIZE="64M"
 
-# 清除旧日志并创建新日志
-> "$LOG_FILE"
+# 初始化日志文件
+init_log() {
+    # 清除旧日志并创建新日志
+    > "$LOG_FILE"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] 脚本启动" >> "$LOG_FILE"
+}
 
 # 日志函数
 info_log() {
@@ -199,8 +211,6 @@ install_single_dependency() {
         return 1
     fi
 }
-
-# 检查权限 - 移到show_menu函数内部调用，因为需要先定义OS变量
 
 # 更新软件包列表的函数
 update_package_lists() {
@@ -471,7 +481,7 @@ create_mount_point() {
     return 0
 }
 
-# 挂载WebDAV服务 - 增强版本
+# 挂载WebDAV服务
 mount_webdav() {
     info_log "挂载WebDAV服务到 $MOUNT_POINT..."
     
@@ -503,11 +513,10 @@ mount_webdav() {
         fi
         
         # 配置文件存在，但连接可能有问题
-        # 避免使用可能不支持的listremotes命令
         info_log "配置文件存在，尝试直接挂载..."
     fi
     
-    # 执行简化的挂载命令
+    # 执行挂载命令
     info_log "执行挂载命令..."
     
     # 简化挂载逻辑，使用最基础的参数
@@ -537,9 +546,9 @@ mount_webdav() {
             # 尝试获取更多错误信息
             info_log "尝试获取更详细的挂载错误信息..."
             rclone mount openlist: "$MOUNT_POINT" \
-            --umask 0000 \
-            --allow-non-empty \
-            --verbose >> "$LOG_FILE" 2>&1 &
+                --umask 0000 \
+                --allow-non-empty \
+                --verbose >> "$LOG_FILE" 2>&1 &
             
             # 给进程一点时间输出错误
             sleep 2
@@ -665,37 +674,27 @@ EOF
             # 设置权限并添加到启动项
             chmod +x "$AUTOSTART_SCRIPT"
             
-            if [ -d "/etc/init.d" ]; then
-                # Debian/Ubuntu/CentOS
-                update-rc.d rclone_openlist defaults 99 10 2>/dev/null || \
-                chkconfig --add rclone_openlist 2>/dev/null
-            fi
+            # 根据不同系统添加到启动项
+            case "$OS" in
+                "Debian")
+                    update-rc.d rclone_openlist defaults || true
+                    ;;
+                "CentOS")
+                    chkconfig --add rclone_openlist || true
+                    ;;
+            esac
         fi
-    fi
-    
-    # 简化的crontab保障机制
-    CRONTAB_ENTRY="@reboot sleep 60 && $(command -v rclone) mount openlist: \"$MOUNT_POINT\" --umask 0000 --allow-non-empty --daemon"
-    
-    # 检查crontab是否已存在该条目
-    if ! crontab -l 2>/dev/null | grep -q "rclone mount openlist"; then
-        (crontab -l 2>/dev/null; echo "$CRONTAB_ENTRY") | crontab -
     fi
     
     success_log "自动启动设置完成"
     return 0
 }
 
-# 显示挂载信息
+# 显示挂载状态
 show_mount_info() {
     clear
     echo -e "${GREEN}============================================${NC}"
-    echo -e "${GREEN}        Rclone OpenList 配置完成          ${NC}"
-    echo -e "${GREEN}============================================${NC}"
-    echo -e "${BLUE}WebDAV 地址:${NC} $WEBDAV_URL"
-    echo -e "${BLUE}WebDAV 账号:${NC} $WEBDAV_USER"
-    echo -e "${BLUE}挂载点:${NC} $MOUNT_POINT"
-    echo -e "${BLUE}分片大小:${NC} $CHUNK_SIZE"
-    echo -e "${BLUE}自动启动:${NC} 已设置 (开机延迟30秒)"
+    echo -e "${GREEN}           Rclone 挂载状态信息               ${NC}"
     echo -e "${GREEN}============================================${NC}"
     echo -e "${YELLOW}挂载状态:${NC}"
     
@@ -739,10 +738,10 @@ main() {
     read -p "WebDAV用户名: " WEBDAV_USER
     read -s -p "WebDAV密码: " WEBDAV_PASS
     echo -e ""
-    read -p "挂载点路径 (默认: /mnt/openlist): " MOUNT_POINT
-    MOUNT_POINT=${MOUNT_POINT:-/mnt/openlist}
-    read -p "分片大小 (默认: 64M，可选: 32M/64M/128M/256M): " CHUNK_SIZE
-    CHUNK_SIZE=${CHUNK_SIZE:-64M}
+    read -p "挂载点路径 (默认: /mnt/openlist): " MOUNT_POINT_INPUT
+    MOUNT_POINT=${MOUNT_POINT_INPUT:-/mnt/openlist}
+    read -p "分片大小 (默认: 64M，可选: 32M/64M/128M/256M): " CHUNK_SIZE_INPUT
+    CHUNK_SIZE=${CHUNK_SIZE_INPUT:-64M}
     
     echo -e ""
     echo -e "${YELLOW}开始安装配置...${NC}"
@@ -751,13 +750,13 @@ main() {
     # 安装依赖
     if ! install_dependencies; then
         error_log "依赖安装失败，请检查权限"
-        exit 1
+        return 1
     fi
     
     # 安装rclone
     if ! install_rclone; then
         error_log "rclone安装失败"
-        exit 1
+        return 1
     fi
     
     # 直接使用明文密码，不做任何加密处理
@@ -767,13 +766,13 @@ main() {
     # 配置rclone
     if ! configure_rclone; then
         error_log "rclone配置失败"
-        exit 1
+        return 1
     fi
     
     # 创建挂载点
     if ! create_mount_point; then
         error_log "挂载点创建失败，请检查权限"
-        exit 1
+        return 1
     fi
     
     # 挂载WebDAV
@@ -791,6 +790,7 @@ main() {
     show_mount_info
     
     info_log "脚本执行完成"
+    return 0
 }
 
 # 更新脚本函数
@@ -807,6 +807,8 @@ update_script() {
     echo -e "${GREEN}============================================${NC}"
     
     local auto_restart=false
+    local SCRIPT_URL=""
+    local WGET_OPTS=""
     
     while true; do
         read -p "请选择更新方式 [1-4]: " update_choice
@@ -1068,8 +1070,10 @@ show_menu() {
             4)
                 echo -e "${BLUE}正在执行: 查看挂载状态${NC}"
                 echo -e "${GREEN}============================================${NC}"
-                # 使用更详细的show_mount_info函数替代简单检查
+                # 使用更详细的show_mount_info函数
                 show_mount_info
+                # 暂停一下，让用户有时间阅读信息
+                sleep 2
                 ;;
             5)
                 echo -e "${BLUE}正在执行: 查看日志${NC}"
@@ -1103,7 +1107,8 @@ show_menu() {
     done
 }
 
+# 初始化日志
+init_log
+
 # 启动菜单
 show_menu
-
-# 检查权限 - 移到show_menu函数内部调用，因为需要先定义OS变量
