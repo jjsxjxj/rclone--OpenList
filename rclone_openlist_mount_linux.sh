@@ -496,11 +496,18 @@ mount_webdav() {
         }
     fi
     
+    # 确保挂载点权限正确
+    chmod 777 "$MOUNT_POINT" 2>/dev/null || {
+        warning_log "无法设置挂载点权限为777，尝试755"
+        chmod 755 "$MOUNT_POINT" 2>/dev/null || {
+            warning_log "设置挂载点权限失败"
+        }
+    }
+    
     # 先检查配置是否正确
     info_log "验证rclone配置..."
-    # 使用更通用的ls命令代替lsd，提高兼容性
-    # 捕获并处理rclone ls命令可能的错误
-    rclone_ls_output=$(rclone ls openlist: -l --max-depth=1 2>&1)
+    # 使用更简单的ls命令，减少参数以提高兼容性
+    rclone_ls_output=$(rclone ls openlist: 2>&1)
     RCLONE_LS_EXIT=$?
     echo "$rclone_ls_output" >> "$LOG_FILE"
     
@@ -513,19 +520,64 @@ mount_webdav() {
         fi
         
         # 配置文件存在，但连接可能有问题
-        info_log "配置文件存在，尝试直接挂载..."
+        info_log "配置文件存在，但连接测试失败，尝试直接挂载..."
+        echo "Rclone连接测试输出: $rclone_ls_output" >> "$LOG_FILE"
+    else
+        info_log "Rclone配置连接测试成功"
     fi
     
-    # 执行挂载命令
+    # 执行挂载命令 - 尝试多种挂载方式
     info_log "执行挂载命令..."
     
-    # 增强挂载逻辑，添加更多稳定的挂载参数
     # 创建缓存目录确保存在
     CACHE_DIR="$HOME/.cache/rclone"
     mkdir -p "$CACHE_DIR"
     
-    # 尝试使用增强参数进行挂载
-    # 添加--allow-other增强兼容性，--buffer-size提高性能，--vfs-cache-mode增强文件操作稳定性
+    # 尝试不同的挂载参数组合，从简单到复杂
+    local mount_attempts=0
+    local max_attempts=3
+    
+    # 尝试方式1：使用最基本的参数（兼容性最高）
+    info_log "尝试挂载方式1：基本参数模式"
+    rclone mount openlist: "$MOUNT_POINT" \
+        --umask 0000 \
+        --allow-non-empty \
+        --daemon >> "$LOG_FILE" 2>&1
+    
+    # 等待挂载完成
+    sleep 3
+    
+    if mount | grep -q "$MOUNT_POINT"; then
+        success_log "WebDAV服务挂载成功！（使用基本参数）"
+        return 0
+    fi
+    
+    # 方式1失败，尝试方式2：添加--allow-other
+    info_log "挂载方式1失败，尝试挂载方式2：添加--allow-other"
+    # 确保进程已停止
+    pkill -f "rclone mount openlist:" 2>/dev/null
+    sleep 2
+    
+    rclone mount openlist: "$MOUNT_POINT" \
+        --umask 0000 \
+        --allow-non-empty \
+        --allow-other \
+        --daemon >> "$LOG_FILE" 2>&1
+    
+    # 等待挂载完成
+    sleep 3
+    
+    if mount | grep -q "$MOUNT_POINT"; then
+        success_log "WebDAV服务挂载成功！（使用allow-other参数）"
+        return 0
+    fi
+    
+    # 方式2失败，尝试方式3：使用全部增强参数
+    info_log "挂载方式2失败，尝试挂载方式3：使用全部增强参数"
+    # 确保进程已停止
+    pkill -f "rclone mount openlist:" 2>/dev/null
+    sleep 2
+    
     rclone mount openlist: "$MOUNT_POINT" \
         --umask 0000 \
         --allow-non-empty \
@@ -536,70 +588,78 @@ mount_webdav() {
         --vfs-read-chunk-size 16M \
         --vfs-read-chunk-size-limit 256M \
         --low-level-retries 3 \
+        --no-modtime \
+        --poll-interval 0 \
         --daemon >> "$LOG_FILE" 2>&1
     
-    # 获取返回值
-    MOUNT_RESULT=$?
+    # 等待挂载完成
+    sleep 3
     
-    # 检查挂载是否成功
-    if [ $MOUNT_RESULT -eq 0 ]; then
-        # 等待挂载完成
-        info_log "等待挂载完成..."
-        sleep 3
-        
-        if mount | grep -q "$MOUNT_POINT"; then
-            success_log "WebDAV服务挂载成功!"
-            return 0
-        else
-            error_log "挂载失败，挂载点未出现在挂载列表中"
-            # 检查是否有rclone进程在运行
-            if pgrep -f "rclone mount" >/dev/null; then
-                warning_log "发现rclone进程在运行但挂载未成功，可能是权限问题"
-            fi
-            # 尝试获取更多错误信息
-            info_log "尝试获取更详细的挂载错误信息..."
-            rclone mount openlist: "$MOUNT_POINT" \
-                --umask 0000 \
-                --allow-non-empty \
-                --allow-other \
-                --verbose >> "$LOG_FILE" 2>&1 &
-            
-            # 给进程一点时间输出错误
-            sleep 2
-            # 杀掉测试进程
-            pkill -f "rclone mount openlist:" || true
-            
-            return 1
-        fi
-    else
-        error_log "挂载命令执行失败，返回码: $MOUNT_RESULT"
-        # 尝试不带daemon模式运行以获取详细错误
-        info_log "尝试不带daemon模式运行以获取详细错误..."
-        rclone mount openlist: "$MOUNT_POINT" \
-            --umask 0000 \
-            --allow-non-empty \
-            --allow-other \
-            --verbose >> "$LOG_FILE" 2>&1 &
-        
-        # 给进程一点时间输出错误
-        sleep 2
-        # 杀掉测试进程
-        pkill -f "rclone mount openlist:" || true
-        
-        # 详细检查FUSE相关组件
-        if ! check_command fusermount; then
-            error_log "未找到fusermount命令，FUSE安装不完整"
-            echo -e "${YELLOW}重要提示: 请手动安装FUSE组件以支持挂载功能${NC}"
-            echo -e "  对于Debian/Ubuntu: apt-get install fuse"
-            echo -e "  对于CentOS/RHEL: yum install fuse"
-            echo -e "  对于Arch Linux: pacman -S fuse"
-        elif ! lsmod | grep -q fuse; then
-            warning_log "FUSE模块未加载，请尝试运行: modprobe fuse"
-            echo -e "${YELLOW}提示: FUSE模块可能未加载，尝试运行: sudo modprobe fuse${NC}"
-        fi
-        
-        return 1
+    if mount | grep -q "$MOUNT_POINT"; then
+        success_log "WebDAV服务挂载成功！（使用增强参数）"
+        return 0
     fi
+    
+    # 所有挂载方式都失败，尝试获取详细错误信息
+    pkill -f "rclone mount openlist:" 2>/dev/null
+    sleep 2
+    
+    info_log "所有挂载方式都失败，尝试获取详细错误信息..."
+    # 不带daemon模式运行，获取详细错误
+    timeout 5 rclone mount openlist: "$MOUNT_POINT" \
+        --umask 0000 \
+        --allow-non-empty \
+        --allow-other \
+        --verbose 2>> "$LOG_FILE" &
+    
+    # 给进程一点时间输出错误
+    sleep 3
+    # 杀掉测试进程
+    pkill -f "rclone mount openlist:" || true
+    
+    # 详细检查系统环境
+    error_log "挂载失败，执行环境检查..."
+    
+    # 检查FUSE相关组件
+    if ! check_command fusermount; then
+        error_log "未找到fusermount命令，FUSE安装不完整"
+        echo -e "${YELLOW}重要提示: 请手动安装FUSE组件以支持挂载功能${NC}"
+        echo -e "  对于Debian/Ubuntu: apt-get install fuse"
+        echo -e "  对于CentOS/RHEL: yum install fuse"
+        echo -e "  对于Arch Linux: pacman -S fuse"
+    elif ! lsmod | grep -q fuse 2>/dev/null; then
+        warning_log "FUSE模块未加载，请尝试运行: modprobe fuse"
+        echo -e "${YELLOW}提示: FUSE模块可能未加载，尝试运行: sudo modprobe fuse${NC}"
+    else
+        # 检查FUSE配置
+        if [ -f /etc/fuse.conf ] && grep -q "user_allow_other" /etc/fuse.conf && ! grep -q "^#user_allow_other" /etc/fuse.conf; then
+            info_log "FUSE配置user_allow_other已启用"
+        else
+            warning_log "FUSE配置中user_allow_other可能未启用"
+            echo -e "${YELLOW}提示: 请尝试编辑/etc/fuse.conf文件，取消注释user_allow_other行${NC}"
+        fi
+    fi
+    
+    # 检查权限问题
+    if [ $(id -u) -ne 0 ]; then
+        warning_log "当前非root用户，可能存在权限问题"
+        echo -e "${YELLOW}提示: 尝试使用root权限运行脚本可能会解决挂载问题${NC}"
+    fi
+    
+    # 检查rclone版本兼容性
+    rclone_version=$(rclone version | grep 'rclone' | head -1)
+    info_log "当前rclone版本: $rclone_version"
+    
+    # 提供备用挂载命令建议
+    echo -e "${YELLOW}挂载失败后的备选方案:${NC}"
+    echo -e "1. 手动尝试挂载命令:"
+    echo -e "   rclone mount openlist: '$MOUNT_POINT' --daemon"
+    echo -e "2. 如仍失败，尝试使用mountpoint命令:"
+    echo -e "   mkdir -p '$MOUNT_POINT'"
+    echo -e "   rclone mount openlist: '$MOUNT_POINT' --daemon"
+    echo -e "3. 详细错误信息已保存至: $LOG_FILE"
+    
+    return 1
 }
 
 # 设置自动启动 - 更新为使用openlist remote
@@ -610,7 +670,7 @@ setup_autostart() {
     AUTOSTART_SCRIPT="/etc/init.d/rclone_openlist"
 
     if [ "$OS" = "OpenWrt" ] || [ "$OS" = "飞牛OS" ]; then
-        # OpenWrt/飞牛OS使用procd - 增强版本
+        # OpenWrt/飞牛OS使用procd - 兼容性优化版本
         cat > "$AUTOSTART_SCRIPT" << EOF
 #!/bin/sh /etc/rc.common
 
@@ -618,19 +678,16 @@ START=99
 STOP=10
 
 start() {
-    # 确保缓存目录存在
-    mkdir -p "$HOME/.cache/rclone"
+    # 确保挂载点目录存在
+    mkdir -p "$MOUNT_POINT"
+    # 设置权限
+    chmod 777 "$MOUNT_POINT" 2>/dev/null || chmod 755 "$MOUNT_POINT" 2>/dev/null
+    # 等待网络完全启动
     sleep 30
+    # 使用基本参数挂载，提高兼容性
     $(command -v rclone) mount openlist: "$MOUNT_POINT" \
         --umask 0000 \
         --allow-non-empty \
-        --allow-other \
-        --buffer-size 32M \
-        --cache-dir "$HOME/.cache/rclone" \
-        --vfs-cache-mode writes \
-        --vfs-read-chunk-size 16M \
-        --vfs-read-chunk-size-limit 256M \
-        --low-level-retries 3 \
         --daemon
 }
 
@@ -650,7 +707,7 @@ EOF
     else
         # 其他系统使用systemd或init.d
         if check_command systemctl; then
-            # 使用systemd - 增强版本
+            # 使用systemd - 兼容性优化版本
             SYSTEMD_SERVICE="/etc/systemd/system/rclone-openlist.service"
             
             cat > "$SYSTEMD_SERVICE" << EOF
@@ -662,17 +719,11 @@ After=network.target
 Type=simple
 User=$(whoami)
 ExecStartPre=/bin/sleep 30
-ExecStartPre=/bin/mkdir -p "$HOME/.cache/rclone"
+ExecStartPre=/bin/mkdir -p "$MOUNT_POINT"
+ExecStartPre=/bin/chmod 777 "$MOUNT_POINT" 2>/dev/null || /bin/chmod 755 "$MOUNT_POINT" 2>/dev/null
 ExecStart=$(command -v rclone) mount openlist: "$MOUNT_POINT" \
   --umask 0000 \
   --allow-non-empty \
-  --allow-other \
-  --buffer-size 32M \
-  --cache-dir "$HOME/.cache/rclone" \
-  --vfs-cache-mode writes \
-  --vfs-read-chunk-size 16M \
-  --vfs-read-chunk-size-limit 256M \
-  --low-level-retries 3 \
   --daemon
 Restart=on-failure
 RestartSec=5
@@ -685,24 +736,20 @@ EOF
             systemctl daemon-reload
             systemctl enable rclone-openlist.service
         else
-            # 使用init.d - 增强版本
+            # 使用init.d - 兼容性优化版本
             cat > "$AUTOSTART_SCRIPT" << EOF
 #!/bin/bash
 
 start() {
-    # 确保缓存目录存在
-    mkdir -p "$HOME/.cache/rclone"
+    # 确保挂载点目录存在
+    mkdir -p "$MOUNT_POINT"
+    # 设置权限
+    chmod 777 "$MOUNT_POINT" 2>/dev/null || chmod 755 "$MOUNT_POINT" 2>/dev/null
     echo "启动Rclone WebDAV挂载..."
+    # 使用基本参数挂载，提高兼容性
     $(command -v rclone) mount openlist: "$MOUNT_POINT" \
         --umask 0000 \
         --allow-non-empty \
-        --allow-other \
-        --buffer-size 32M \
-        --cache-dir "$HOME/.cache/rclone" \
-        --vfs-cache-mode writes \
-        --vfs-read-chunk-size 16M \
-        --vfs-read-chunk-size-limit 256M \
-        --low-level-retries 3 \
         --daemon
     echo "Rclone WebDAV挂载已启动"
 }
