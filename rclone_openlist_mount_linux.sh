@@ -156,16 +156,56 @@ install_dependencies() {
             ;;
         "飞牛OS")
             # 飞牛OS (类似Debian)
+            info_log "正在更新软件包列表..."
             apt-get update -y || {
                 warning_log "初次更新失败，尝试修复apt源..."
                 apt-get clean || true
                 rm -rf /var/lib/apt/lists/* || true
                 apt-get update -y || {
-                    error_log "更新软件包列表失败"
+                    error_log "更新软件包列表失败，请检查网络连接或源配置"
                     return 1
                 }
             }
-            apt-get install -y wget unzip curl fuse grep sed awk >> "$LOG_FILE" 2>&1
+            
+            info_log "正在安装依赖包..."
+            # 分别安装软件包，增加成功率
+            apt-get install -y wget || {
+                error_log "wget安装失败"
+                return 1
+            }
+            apt-get install -y unzip || {
+                error_log "unzip安装失败"
+                return 1
+            }
+            apt-get install -y curl || {
+                error_log "curl安装失败"
+                return 1
+            }
+            # 对于grep、sed、awk，分别安装并处理可能的找不到候选问题
+            apt-get install -y grep || {
+                warning_log "grep安装失败，检查是否已存在"
+                which grep >/dev/null || error_log "grep不存在"
+            }
+            apt-get install -y sed || {
+                warning_log "sed安装失败，检查是否已存在"
+                which sed >/dev/null || error_log "sed不存在"
+            }
+            # 针对飞牛OS的awk问题，先尝试安装gawk作为替代
+            if ! apt-get install -y gawk; then
+                warning_log "gawk安装失败，检查awk是否已存在"
+                which awk >/dev/null || error_log "awk相关工具不存在"
+            else
+                # 如果安装了gawk，确保有awk命令
+                if ! which awk >/dev/null; then
+                    ln -sf $(which gawk) /usr/bin/awk 2>/dev/null || {
+                        warning_log "无法创建awk符号链接"
+                    }
+                fi
+            fi
+            # 尝试安装fuse
+            apt-get install -y fuse || {
+                warning_log "fuse安装失败"
+            }
             ;;
         *)
             error_log "不支持的系统类型"
