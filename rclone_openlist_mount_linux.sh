@@ -200,6 +200,8 @@ install_single_dependency() {
     fi
 }
 
+# 检查权限 - 移到show_menu函数内部调用，因为需要先定义OS变量
+
 # 更新软件包列表的函数
 update_package_lists() {
     info_log "更新软件包列表..."
@@ -533,7 +535,7 @@ mount_webdav() {
                 warning_log "发现rclone进程在运行但挂载未成功，可能是权限问题"
             fi
             # 尝试获取更多错误信息
-        info_log "尝试获取更详细的挂载错误信息..."
+            info_log "尝试获取更详细的挂载错误信息..."
         rclone mount openlist: "$MOUNT_POINT" \
             --umask 0000 \
             --allow-non-empty \
