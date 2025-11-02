@@ -500,17 +500,14 @@ mount_webdav() {
         info_log "配置文件存在，尝试直接挂载..."
     fi
     
-    # 执行挂载命令 - 使用openlist remote
+    # 执行挂载命令 - 使用openlist remote（简化参数以提高兼容性）
     info_log "执行挂载命令..."
     rclone mount openlist: "$MOUNT_POINT" \
         --umask 0000 \
         --default-permissions \
         --allow-other \
         --dir-cache-time 6h \
-        --buffer-size 64M \
-        --low-level-retries 200 \
-        --vfs-read-chunk-size $CHUNK_SIZE \
-        --vfs-read-chunk-size-limit 2G \
+        --low-level-retries 10 \
         --log-level INFO \
         --daemon >> "$LOG_FILE" 2>&1
     
@@ -540,10 +537,7 @@ mount_webdav() {
                 --allow-non-empty \
                 --allow-other \
                 --dir-cache-time 6h \
-                --buffer-size 64M \
-                --low-level-retries 200 \
-                --vfs-read-chunk-size $CHUNK_SIZE \
-                --vfs-read-chunk-size-limit 2G \
+                --low-level-retries 10 \
                 --verbose --verbose >> "$LOG_FILE" 2>&1 &
             
             # 给进程一点时间输出错误
@@ -563,10 +557,7 @@ mount_webdav() {
             --allow-non-empty \
             --allow-other \
             --dir-cache-time 6h \
-            --buffer-size 64M \
-            --low-level-retries 200 \
-            --vfs-read-chunk-size $CHUNK_SIZE \
-            --vfs-read-chunk-size-limit 2G \
+            --low-level-retries 10 \
             --verbose --verbose >> "$LOG_FILE" 2>&1 &
         
         # 给进程一点时间输出错误
@@ -606,10 +597,7 @@ start() {
         --allow-non-empty \
         --allow-other \
         --dir-cache-time 6h \
-        --buffer-size 64M \
-        --low-level-retries 200 \
-        --vfs-read-chunk-size $CHUNK_SIZE \
-        --vfs-read-chunk-size-limit 2G \
+        --low-level-retries 10 \
         --daemon
 }
 
@@ -647,10 +635,8 @@ ExecStart=$(command -v rclone) mount openlist: "$MOUNT_POINT" \
     --allow-non-empty \
     --allow-other \
     --dir-cache-time 6h \
-    --buffer-size 64M \
-    --low-level-retries 200 \
-    --vfs-read-chunk-size $CHUNK_SIZE \
-    --vfs-read-chunk-size-limit 2G
+    --low-level-retries 10 \
+    --log-level INFO
 Restart=on-failure
 RestartSec=5
 
