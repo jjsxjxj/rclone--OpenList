@@ -519,10 +519,23 @@ mount_webdav() {
     # 执行挂载命令
     info_log "执行挂载命令..."
     
-    # 简化挂载逻辑，使用最基础的参数
+    # 增强挂载逻辑，添加更多稳定的挂载参数
+    # 创建缓存目录确保存在
+    CACHE_DIR="$HOME/.cache/rclone"
+    mkdir -p "$CACHE_DIR"
+    
+    # 尝试使用增强参数进行挂载
+    # 添加--allow-other增强兼容性，--buffer-size提高性能，--vfs-cache-mode增强文件操作稳定性
     rclone mount openlist: "$MOUNT_POINT" \
         --umask 0000 \
         --allow-non-empty \
+        --allow-other \
+        --buffer-size 32M \
+        --cache-dir "$CACHE_DIR" \
+        --vfs-cache-mode writes \
+        --vfs-read-chunk-size 16M \
+        --vfs-read-chunk-size-limit 256M \
+        --low-level-retries 3 \
         --daemon >> "$LOG_FILE" 2>&1
     
     # 获取返回值
@@ -548,6 +561,7 @@ mount_webdav() {
             rclone mount openlist: "$MOUNT_POINT" \
                 --umask 0000 \
                 --allow-non-empty \
+                --allow-other \
                 --verbose >> "$LOG_FILE" 2>&1 &
             
             # 给进程一点时间输出错误
@@ -559,11 +573,12 @@ mount_webdav() {
         fi
     else
         error_log "挂载命令执行失败，返回码: $MOUNT_RESULT"
-        # 简化错误处理
+        # 尝试不带daemon模式运行以获取详细错误
         info_log "尝试不带daemon模式运行以获取详细错误..."
         rclone mount openlist: "$MOUNT_POINT" \
             --umask 0000 \
             --allow-non-empty \
+            --allow-other \
             --verbose >> "$LOG_FILE" 2>&1 &
         
         # 给进程一点时间输出错误
@@ -571,9 +586,16 @@ mount_webdav() {
         # 杀掉测试进程
         pkill -f "rclone mount openlist:" || true
         
-        # 简化检查
+        # 详细检查FUSE相关组件
         if ! check_command fusermount; then
-            warning_log "未找到fusermount命令，可能是fuse安装不完整"
+            error_log "未找到fusermount命令，FUSE安装不完整"
+            echo -e "${YELLOW}重要提示: 请手动安装FUSE组件以支持挂载功能${NC}"
+            echo -e "  对于Debian/Ubuntu: apt-get install fuse"
+            echo -e "  对于CentOS/RHEL: yum install fuse"
+            echo -e "  对于Arch Linux: pacman -S fuse"
+        elif ! lsmod | grep -q fuse; then
+            warning_log "FUSE模块未加载，请尝试运行: modprobe fuse"
+            echo -e "${YELLOW}提示: FUSE模块可能未加载，尝试运行: sudo modprobe fuse${NC}"
         fi
         
         return 1
@@ -588,7 +610,7 @@ setup_autostart() {
     AUTOSTART_SCRIPT="/etc/init.d/rclone_openlist"
 
     if [ "$OS" = "OpenWrt" ] || [ "$OS" = "飞牛OS" ]; then
-        # OpenWrt/飞牛OS使用procd - 简化版本
+        # OpenWrt/飞牛OS使用procd - 增强版本
         cat > "$AUTOSTART_SCRIPT" << EOF
 #!/bin/sh /etc/rc.common
 
@@ -596,10 +618,19 @@ START=99
 STOP=10
 
 start() {
+    # 确保缓存目录存在
+    mkdir -p "$HOME/.cache/rclone"
     sleep 30
     $(command -v rclone) mount openlist: "$MOUNT_POINT" \
         --umask 0000 \
         --allow-non-empty \
+        --allow-other \
+        --buffer-size 32M \
+        --cache-dir "$HOME/.cache/rclone" \
+        --vfs-cache-mode writes \
+        --vfs-read-chunk-size 16M \
+        --vfs-read-chunk-size-limit 256M \
+        --low-level-retries 3 \
         --daemon
 }
 
@@ -619,7 +650,7 @@ EOF
     else
         # 其他系统使用systemd或init.d
         if check_command systemctl; then
-            # 使用systemd
+            # 使用systemd - 增强版本
             SYSTEMD_SERVICE="/etc/systemd/system/rclone-openlist.service"
             
             cat > "$SYSTEMD_SERVICE" << EOF
@@ -631,7 +662,18 @@ After=network.target
 Type=simple
 User=$(whoami)
 ExecStartPre=/bin/sleep 30
-ExecStart=$(command -v rclone) mount openlist: "$MOUNT_POINT" --umask 0000 --allow-non-empty --daemon
+ExecStartPre=/bin/mkdir -p "$HOME/.cache/rclone"
+ExecStart=$(command -v rclone) mount openlist: "$MOUNT_POINT" \
+  --umask 0000 \
+  --allow-non-empty \
+  --allow-other \
+  --buffer-size 32M \
+  --cache-dir "$HOME/.cache/rclone" \
+  --vfs-cache-mode writes \
+  --vfs-read-chunk-size 16M \
+  --vfs-read-chunk-size-limit 256M \
+  --low-level-retries 3 \
+  --daemon
 Restart=on-failure
 RestartSec=5
 
@@ -643,29 +685,66 @@ EOF
             systemctl daemon-reload
             systemctl enable rclone-openlist.service
         else
-            # 使用init.d - 简化版本
+            # 使用init.d - 增强版本
             cat > "$AUTOSTART_SCRIPT" << EOF
 #!/bin/bash
 
+start() {
+    # 确保缓存目录存在
+    mkdir -p "$HOME/.cache/rclone"
+    echo "启动Rclone WebDAV挂载..."
+    $(command -v rclone) mount openlist: "$MOUNT_POINT" \
+        --umask 0000 \
+        --allow-non-empty \
+        --allow-other \
+        --buffer-size 32M \
+        --cache-dir "$HOME/.cache/rclone" \
+        --vfs-cache-mode writes \
+        --vfs-read-chunk-size 16M \
+        --vfs-read-chunk-size-limit 256M \
+        --low-level-retries 3 \
+        --daemon
+    echo "Rclone WebDAV挂载已启动"
+}
+
+stop() {
+    echo "停止Rclone WebDAV挂载..."
+    killall -9 rclone
+    umount "$MOUNT_POINT" 2>/dev/null
+    echo "Rclone WebDAV挂载已停止"
+}
+
+restart() {
+    stop
+    sleep 2
+    start
+}
+
+status() {
+    if pgrep -f "rclone mount" >/dev/null; then
+        echo "Rclone WebDAV挂载正在运行"
+        return 0
+    else
+        echo "Rclone WebDAV挂载未运行"
+        return 1
+    fi
+}
+
 case "\$1" in
     start)
-        sleep 30
-        $(command -v rclone) mount openlist: "$MOUNT_POINT" \
-            --umask 0000 \
-            --allow-non-empty \
-            --daemon
+        start
         ;;
     stop)
-        killall -9 rclone 2>/dev/null
-        umount "$MOUNT_POINT" 2>/dev/null
+        stop
         ;;
     restart)
-        \$0 stop
-        sleep 2
-        \$0 start
+        restart
+        ;;
+    status)
+        status
         ;;
     *)
-        echo "Usage: \$0 {start|stop|restart}"
+        echo "用法: $0 {start|stop|restart|status}"
         exit 1
         ;;
 esac
