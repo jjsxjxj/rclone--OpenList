@@ -481,10 +481,19 @@ mount_webdav() {
     
     # 先检查配置是否正确
     info_log "验证rclone配置..."
-    rclone lsd openlist: >> "$LOG_FILE" 2>&1 || {
-        error_log "无法连接到WebDAV服务器，请检查配置信息"
+    # 使用更通用的ls命令代替lsd，提高兼容性
+    rclone ls openlist: -l --max-depth=1 >> "$LOG_FILE" 2>&1 || {
+        # 如果ls命令也失败，尝试使用listremotes命令检查配置是否存在
+        rclone listremotes | grep -q "^openlist:" >> "$LOG_FILE" 2>&1 || {
+            error_log "rclone配置可能不存在或不正确"
+            echo "详细错误: " >> "$LOG_FILE"
+            rclone listremotes >> "$LOG_FILE" 2>&1
+            return 1
+        }
+        # 配置存在但连接失败
+        error_log "无法连接到WebDAV服务器，请检查配置信息和网络连接"
         echo "详细错误: " >> "$LOG_FILE"
-        rclone lsd openlist: --verbose >> "$LOG_FILE" 2>&1
+        rclone ls openlist: --verbose >> "$LOG_FILE" 2>&1
         return 1
     }
     
@@ -829,6 +838,195 @@ main() {
     info_log "脚本执行完成"
 }
 
+# 更新脚本函数
+update_script() {
+    clear
+    echo -e "${GREEN}============================================${NC}"
+    echo -e "${GREEN}            脚本更新功能                      ${NC}"
+    echo -e "${GREEN}============================================${NC}"
+    echo -e "请选择更新方式:"
+    echo -e "${BLUE}1.${NC} 方法1: GitHub原始地址 (不检查SSL证书)"
+    echo -e "${BLUE}2.${NC} 方法2: CDN下载 (推荐)"
+    echo -e "${BLUE}3.${NC} 方法3: GitHub代理地址"
+    echo -e "${BLUE}4.${NC} 手动输入脚本地址"
+    echo -e "${GREEN}============================================${NC}"
+    
+    local auto_restart=false
+    
+    while true; do
+        read -p "请选择更新方式 [1-4]: " update_choice
+        
+        case $update_choice in
+            1)
+                SCRIPT_URL="https://raw.githubusercontent.com/jjsxjxj/rclone--OpenList/main/rclone_openlist_mount_linux.sh"
+                WGET_OPTS="--no-check-certificate"
+                break
+                ;;
+            2)
+                SCRIPT_URL="https://cdn.jsdelivr.net/gh/jjsxjxj/rclone--OpenList@main/rclone_openlist_mount_linux.sh"
+                WGET_OPTS="--no-check-certificate"
+                break
+                ;;
+            3)
+                # 方法3: 尝试多个GitHub代理
+                SCRIPT_URL="https://gh.api.99988866.xyz/https://raw.githubusercontent.com/jjsxjxj/rclone--OpenList/main/rclone_openlist_mount_linux.sh"
+                WGET_OPTS="--no-check-certificate"
+                break
+                ;;
+            4)
+                echo -e "请输入自定义脚本下载地址:"
+                read -p "脚本地址: " SCRIPT_URL
+                WGET_OPTS=""
+                break
+                ;;
+            *)
+                echo -e "${RED}无效的选择，请重新输入${NC}"
+                ;;
+        esac
+    done
+    
+    # 询问是否更新后自动重新运行
+    echo -e "${GREEN}============================================${NC}"
+    read -p "更新完成后是否自动重新运行脚本? (y/n): " restart_choice
+    if [ "$restart_choice" = "y" ] || [ "$restart_choice" = "Y" ]; then
+        auto_restart=true
+    fi
+    
+    # 验证URL不为空
+    if [ -z "$SCRIPT_URL" ]; then
+        error_log "脚本地址不能为空"
+        echo -e "${RED}错误: 脚本地址不能为空${NC}"
+        return 1
+    fi
+    
+    # 保存当前脚本名称
+    CURRENT_SCRIPT_NAME=$(basename "$0")
+    TEMP_SCRIPT="/tmp/${CURRENT_SCRIPT_NAME}.new"
+    
+    echo -e "${BLUE}正在下载最新脚本...${NC}"
+    info_log "开始下载脚本: $SCRIPT_URL"
+    
+    # 尝试使用wget或curl下载
+    if check_command wget; then
+        # 使用预设的wget选项
+        wget -q -O "$TEMP_SCRIPT" $WGET_OPTS "$SCRIPT_URL" || {
+            error_log "wget下载失败"
+            echo -e "${RED}错误: wget下载脚本失败${NC}"
+            
+            # 如果是方法3，尝试备用代理
+            if [ "$update_choice" = "3" ]; then
+                echo -e "${BLUE}尝试备用GitHub代理...${NC}"
+                SCRIPT_URL="https://raw.fastgit.org/jjsxjxj/rclone--OpenList/main/rclone_openlist_mount_linux.sh"
+                wget -q -O "$TEMP_SCRIPT" $WGET_OPTS "$SCRIPT_URL" || {
+                    error_log "备用代理下载也失败"
+                    echo -e "${RED}错误: 备用代理下载也失败${NC}"
+                    return 1
+                }
+            else
+                return 1
+            fi
+        }
+    elif check_command curl; then
+        # curl不使用SSL检查选项
+        curl -s -o "$TEMP_SCRIPT" "$SCRIPT_URL" || {
+            # 如果失败且支持SSL选项，尝试不检查SSL
+            curl -s -k -o "$TEMP_SCRIPT" "$SCRIPT_URL" || {
+                error_log "curl下载失败"
+                echo -e "${RED}错误: curl下载脚本失败${NC}"
+                return 1
+            }
+        }
+    else
+        error_log "wget和curl都不可用"
+        echo -e "${RED}错误: wget和curl都不可用，无法下载脚本${NC}"
+        return 1
+    fi
+    
+    # 检查下载的文件大小
+    if [ ! -s "$TEMP_SCRIPT" ]; then
+        error_log "下载的脚本文件为空"
+        echo -e "${RED}错误: 下载的脚本文件为空${NC}"
+        rm -f "$TEMP_SCRIPT"
+        return 1
+    fi
+    
+    # 检查文件是否为有效的bash脚本（简单检查）
+    if ! grep -q "^#!/bin/bash" "$TEMP_SCRIPT"; then
+        warning_log "下载的文件可能不是有效的bash脚本"
+        echo -e "${YELLOW}警告: 下载的文件可能不是有效的bash脚本${NC}"
+        echo -e "但仍将继续更新过程..."
+    fi
+    
+    # 设置可执行权限
+    chmod +x "$TEMP_SCRIPT" || {
+        warning_log "设置执行权限失败"
+        echo -e "${YELLOW}警告: 设置脚本执行权限失败${NC}"
+    }
+    
+    # 备份当前脚本
+    CURRENT_SCRIPT_PATH="$(readlink -f "$0")"
+    BACKUP_SCRIPT="${CURRENT_SCRIPT_PATH}.bak.$(date +%Y%m%d%H%M%S)"
+    
+    echo -e "${BLUE}正在备份当前脚本...${NC}"
+    info_log "备份当前脚本到: $BACKUP_SCRIPT"
+    
+    cp "$CURRENT_SCRIPT_PATH" "$BACKUP_SCRIPT" || {
+        warning_log "备份脚本失败，但将继续更新"
+        echo -e "${YELLOW}警告: 备份脚本失败，但将继续更新${NC}"
+    }
+    
+    # 替换当前脚本
+    echo -e "${BLUE}正在更新脚本...${NC}"
+    info_log "使用新脚本替换当前脚本"
+    
+    # 尝试使用cp和mv两种方式确保更新成功
+    cp "$TEMP_SCRIPT" "$CURRENT_SCRIPT_PATH.new" && \
+    mv -f "$CURRENT_SCRIPT_PATH.new" "$CURRENT_SCRIPT_PATH" || {
+        error_log "更新脚本失败"
+        echo -e "${RED}错误: 更新脚本失败${NC}"
+        rm -f "$TEMP_SCRIPT" "$CURRENT_SCRIPT_PATH.new"
+        echo -e "${BLUE}尝试使用备用方法更新...${NC}"
+        # 备用方法：直接尝试覆盖
+        cat "$TEMP_SCRIPT" > "$CURRENT_SCRIPT_PATH" || {
+            error_log "所有更新方法都失败"
+            echo -e "${RED}错误: 所有更新方法都失败${NC}"
+            echo -e "${BLUE}您可以手动使用以下命令更新:${NC}"
+            echo -e "cp '$TEMP_SCRIPT' '$CURRENT_SCRIPT_PATH'"
+            return 1
+        }
+    }
+    
+    # 清理临时文件
+    rm -f "$TEMP_SCRIPT"
+    
+    success_log "脚本更新成功"
+    echo -e "${GREEN}============================================${NC}"
+    echo -e "${GREEN}脚本更新成功！${NC}"
+    echo -e "备份文件已保存至: $BACKUP_SCRIPT"
+    
+    # 自动重新运行脚本
+    if [ "$auto_restart" = true ]; then
+        echo -e "${BLUE}即将自动重新运行脚本...${NC}"
+        echo -e "${GREEN}============================================${NC}"
+        sleep 2
+        
+        # 保存当前脚本路径
+        CURRENT_SCRIPT_PATH="$(readlink -f "$0")"
+        
+        # 重新执行脚本
+        info_log "自动重新运行脚本: $CURRENT_SCRIPT_PATH"
+        exec "$CURRENT_SCRIPT_PATH"
+        # 如果exec失败，才会执行下面的代码
+        echo -e "${RED}错误: 自动重新运行脚本失败${NC}"
+        error_log "自动重新运行脚本失败"
+    else
+        echo -e "请手动重新运行脚本以应用新功能。"
+        echo -e "${GREEN}============================================${NC}"
+    fi
+    
+    return 0
+}
+
 # 菜单函数
 show_menu() {
     # 先检测系统
@@ -853,9 +1051,10 @@ show_menu() {
         echo -e "${BLUE}3.${NC} 卸载WebDAV"
         echo -e "${BLUE}4.${NC} 查看挂载状态"
         echo -e "${BLUE}5.${NC} 查看日志"
-        echo -e "${BLUE}6.${NC} 退出"
+        echo -e "${BLUE}6.${NC} 更新脚本"
+        echo -e "${BLUE}7.${NC} 退出"
         echo -e "${GREEN}============================================${NC}"
-        read -p "请选择操作 [1-6]: " choice
+        read -p "请选择操作 [1-7]: " choice
         
         case $choice in
             1)
@@ -920,6 +1119,10 @@ show_menu() {
                 read -p "按Enter键返回菜单..."
                 ;;
             6)
+                update_script
+                read -p "按Enter键返回菜单..."
+                ;;
+            7)
                 echo -e "${GREEN}谢谢使用，再见！${NC}"
                 exit 0
                 ;;
