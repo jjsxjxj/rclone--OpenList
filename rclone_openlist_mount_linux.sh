@@ -422,9 +422,9 @@ configure_rclone() {
     # 再次确保URL不以斜杠结尾（双重保障）
     CLEAN_WEBDAV_URL=$(echo "$WEBDAV_URL" | sed 's/\/$//')
     
-    # 创建配置文件
+    # 创建配置文件 - 使用openlist作为remote名称以匹配提示信息
     cat > ~/.config/rclone/rclone.conf << EOF
-[webdav]
+[openlist]
 type = webdav
 url = $CLEAN_WEBDAV_URL
 vendor = other
@@ -464,46 +464,114 @@ create_mount_point() {
     return 0
 }
 
-# 挂载WebDAV服务
+# 挂载WebDAV服务 - 增强版本
 mount_webdav() {
     info_log "挂载WebDAV服务到 $MOUNT_POINT..."
     
     # 检查是否已挂载
     if mount | grep -q "$MOUNT_POINT"; then
         info_log "检测到$MOUNT_POINT已挂载，先卸载..."
-        umount "$MOUNT_POINT" >> "$LOG_FILE" 2>&1
+        umount "$MOUNT_POINT" >> "$LOG_FILE" 2>&1 || {
+            warning_log "卸载失败，可能需要强制卸载"
+            umount -f "$MOUNT_POINT" >> "$LOG_FILE" 2>&1 || {
+                warning_log "强制卸载也失败，将继续尝试挂载"
+            }
+        }
     fi
     
-    # 执行挂载命令
-    rclone mount webdav: "$MOUNT_POINT" \
+    # 先检查配置是否正确
+    info_log "验证rclone配置..."
+    rclone lsd openlist: >> "$LOG_FILE" 2>&1 || {
+        error_log "无法连接到WebDAV服务器，请检查配置信息"
+        echo "详细错误: " >> "$LOG_FILE"
+        rclone lsd openlist: --verbose >> "$LOG_FILE" 2>&1
+        return 1
+    }
+    
+    # 执行挂载命令 - 使用openlist remote
+    info_log "执行挂载命令..."
+    rclone mount openlist: "$MOUNT_POINT" \
         --umask 0000 \
         --default-permissions \
-        --allow-non-empty \
         --allow-other \
         --dir-cache-time 6h \
         --buffer-size 64M \
         --low-level-retries 200 \
         --vfs-read-chunk-size $CHUNK_SIZE \
         --vfs-read-chunk-size-limit 2G \
+        --log-level INFO \
         --daemon >> "$LOG_FILE" 2>&1
     
-    if [ $? -eq 0 ]; then
+    # 获取返回值
+    MOUNT_RESULT=$?
+    
+    # 检查挂载是否成功
+    if [ $MOUNT_RESULT -eq 0 ]; then
         # 等待挂载完成
+        info_log "等待挂载完成..."
         sleep 3
+        
         if mount | grep -q "$MOUNT_POINT"; then
             success_log "WebDAV服务挂载成功!"
             return 0
         else
             error_log "挂载失败，挂载点未出现在挂载列表中"
+            # 检查是否有rclone进程在运行
+            if pgrep -f "rclone mount" >/dev/null; then
+                warning_log "发现rclone进程在运行但挂载未成功，可能是权限问题"
+            fi
+            # 尝试获取更多错误信息
+            info_log "尝试获取更详细的挂载错误信息..."
+            rclone mount openlist: "$MOUNT_POINT" \
+                --umask 0000 \
+                --default-permissions \
+                --allow-non-empty \
+                --allow-other \
+                --dir-cache-time 6h \
+                --buffer-size 64M \
+                --low-level-retries 200 \
+                --vfs-read-chunk-size $CHUNK_SIZE \
+                --vfs-read-chunk-size-limit 2G \
+                --verbose --verbose >> "$LOG_FILE" 2>&1 &
+            
+            # 给进程一点时间输出错误
+            sleep 2
+            # 杀掉测试进程
+            pkill -f "rclone mount openlist:" || true
+            
             return 1
         fi
     else
-        error_log "挂载命令执行失败"
+        error_log "挂载命令执行失败，返回码: $MOUNT_RESULT"
+        # 尝试不带--daemon参数运行一次，获取详细错误信息
+        info_log "尝试不带daemon模式运行以获取详细错误..."
+        rclone mount openlist: "$MOUNT_POINT" \
+            --umask 0000 \
+            --default-permissions \
+            --allow-non-empty \
+            --allow-other \
+            --dir-cache-time 6h \
+            --buffer-size 64M \
+            --low-level-retries 200 \
+            --vfs-read-chunk-size $CHUNK_SIZE \
+            --vfs-read-chunk-size-limit 2G \
+            --verbose --verbose >> "$LOG_FILE" 2>&1 &
+        
+        # 给进程一点时间输出错误
+        sleep 2
+        # 杀掉测试进程
+        pkill -f "rclone mount openlist:" || true
+        
+        # 检查fuse相关问题
+        if ! check_command fusermount; then
+            warning_log "未找到fusermount命令，可能是fuse安装不完整"
+        fi
+        
         return 1
     fi
 }
 
-# 设置自动启动
+# 设置自动启动 - 更新为使用openlist remote
 setup_autostart() {
     info_log "设置自动启动..."
     
@@ -520,7 +588,7 @@ STOP=10
 
 start() {
     sleep 30
-    $(command -v rclone) mount webdav: "$MOUNT_POINT" \
+    $(command -v rclone) mount openlist: "$MOUNT_POINT" \
         --umask 0000 \
         --default-permissions \
         --allow-non-empty \
@@ -561,7 +629,7 @@ After=network.target
 Type=simple
 User=$(whoami)
 ExecStartPre=/bin/sleep 30
-ExecStart=$(command -v rclone) mount webdav: "$MOUNT_POINT" \
+ExecStart=$(command -v rclone) mount openlist: "$MOUNT_POINT" \
     --umask 0000 \
     --default-permissions \
     --allow-non-empty \
@@ -589,7 +657,7 @@ EOF
 case "\$1" in
     start)
         sleep 30
-        $(command -v rclone) mount webdav: "$MOUNT_POINT" \
+        $(command -v rclone) mount openlist: "$MOUNT_POINT" \
             --umask 0000 \
             --default-permissions \
             --allow-non-empty \
@@ -628,8 +696,8 @@ EOF
         fi
     fi
     
-    # 额外的crontab保障机制
-    CRONTAB_ENTRY="@reboot sleep 60 && $(command -v rclone) mount webdav: \"$MOUNT_POINT\" --umask 0000 --default-permissions --allow-non-empty --allow-other --dir-cache-time 6h --buffer-size 64M --low-level-retries 200 --vfs-read-chunk-size $CHUNK_SIZE --vfs-read-chunk-size-limit 2G --daemon"
+    # 额外的crontab保障机制 - 更新为使用openlist remote
+    CRONTAB_ENTRY="@reboot sleep 60 && $(command -v rclone) mount openlist: \"$MOUNT_POINT\" --umask 0000 --default-permissions --allow-non-empty --allow-other --dir-cache-time 6h --buffer-size 64M --low-level-retries 200 --vfs-read-chunk-size $CHUNK_SIZE --vfs-read-chunk-size-limit 2G --daemon"
     
     # 检查crontab是否已存在该条目
     if ! crontab -l 2>/dev/null | grep -q "rclone mount openlist"; then
@@ -717,7 +785,16 @@ main() {
     
     # 加密密码 - 确保在rclone安装后执行
     if command -v rclone > /dev/null 2>&1; then
-        WEBDAV_PASS_ENCRYPTED=$(rclone obscure "$WEBDAV_PASS" 2>/dev/null || echo "$WEBDAV_PASS")
+        # 使用更安全的方式处理密码加密，捕获可能的错误
+        ENCRYPTION_RESULT=$(rclone obscure "$WEBDAV_PASS" 2>&1)
+        if [ $? -eq 0 ]; then
+            WEBDAV_PASS_ENCRYPTED="$ENCRYPTION_RESULT"
+            info_log "密码加密成功"
+        else
+            # 加密失败，使用明文密码但记录警告
+            WEBDAV_PASS_ENCRYPTED="$WEBDAV_PASS"
+            warning_log "rclone obscure加密失败: $ENCRYPTION_RESULT，将使用明文密码"
+        fi
     else
         WEBDAV_PASS_ENCRYPTED="$WEBDAV_PASS"
         warning_log "无法使用rclone obscure加密密码，将使用明文密码"
@@ -789,14 +866,28 @@ show_menu() {
                 echo -e "重新挂载WebDAV..."
                 # 读取配置信息
                 if [ -f ~/.config/rclone/rclone.conf ]; then
-                    WEBDAV_URL=$(grep -A 4 "\[webdav\]" ~/.config/rclone/rclone.conf | grep "url =" | cut -d'=' -f2 | tr -d ' ')
-                    WEBDAV_USER=$(grep -A 4 "\[webdav\]" ~/.config/rclone/rclone.conf | grep "user =" | cut -d'=' -f2 | tr -d ' ')
-                    WEBDAV_PASS_ENCRYPTED=$(grep -A 4 "\[webdav\]" ~/.config/rclone/rclone.conf | grep "pass =" | cut -d'=' -f2 | tr -d ' ')
+                    # 优先查找openlist remote，兼容旧的webdav remote
+                    if grep -q "\[openlist\]" ~/.config/rclone/rclone.conf; then
+                        WEBDAV_URL=$(grep -A 4 "\[openlist\]" ~/.config/rclone/rclone.conf | grep "url =" | cut -d'=' -f2 | tr -d ' ')
+                        WEBDAV_USER=$(grep -A 4 "\[openlist\]" ~/.config/rclone/rclone.conf | grep "user =" | cut -d'=' -f2 | tr -d ' ')
+                        WEBDAV_PASS_ENCRYPTED=$(grep -A 4 "\[openlist\]" ~/.config/rclone/rclone.conf | grep "pass =" | cut -d'=' -f2 | tr -d ' ')
+                        info_log "使用openlist remote配置"
+                    elif grep -q "\[webdav\]" ~/.config/rclone/rclone.conf; then
+                        WEBDAV_URL=$(grep -A 4 "\[webdav\]" ~/.config/rclone/rclone.conf | grep "url =" | cut -d'=' -f2 | tr -d ' ')
+                        WEBDAV_USER=$(grep -A 4 "\[webdav\]" ~/.config/rclone/rclone.conf | grep "user =" | cut -d'=' -f2 | tr -d ' ')
+                        WEBDAV_PASS_ENCRYPTED=$(grep -A 4 "\[webdav\]" ~/.config/rclone/rclone.conf | grep "pass =" | cut -d'=' -f2 | tr -d ' ')
+                        info_log "使用webdav remote配置"
+                    else
+                        error_log "未找到openlist或webdav remote配置"
+                        read -p "按Enter键返回菜单..."
+                        continue
+                    fi
+                    
                     MOUNT_POINT=$(mount | grep "rclone" | awk '{print $3}' || echo "/mnt/openlist")
                     CHUNK_SIZE="64M" # 默认值
                     
                     # 卸载并重新挂载
-                    umount "$MOUNT_POINT" 2>/dev/null
+                    umount "$MOUNT_POINT" 2>/dev/null || true
                     mount_webdav
                     read -p "按Enter键返回菜单..."
                 else
