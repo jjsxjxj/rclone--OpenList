@@ -984,7 +984,6 @@ check_system_limits() {
     
     return 0
 }
-}
 
 # 设置自动启动 - 使用多阶段挂载策略
 setup_autostart() {
