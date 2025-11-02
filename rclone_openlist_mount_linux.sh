@@ -88,17 +88,62 @@ install_dependencies() {
     
     case "$OS" in
         "Debian")
-            # Ubuntu/Debian
-            apt-get update -y >> "$LOG_FILE" 2>&1
-            apt-get install -y wget unzip curl fuse3 grep sed awk mount >> "$LOG_FILE" 2>&1
+            # Ubuntu/Debian - 增强的错误处理
+            info_log "正在更新软件包列表..."
+            apt-get update -y || {
+                warning_log "初次更新失败，尝试修复apt源..."
+                # 尝试修复常见的apt问题
+                apt-get clean || true
+                rm -rf /var/lib/apt/lists/* || true
+                apt-get update -y || {
+                    error_log "更新软件包列表失败，请检查网络连接或源配置"
+                    return 1
+                }
+            }
+            
+            info_log "正在安装依赖包..."
+            # 分别安装软件包，增加成功率
+            apt-get install -y wget || {
+                error_log "wget安装失败"
+                return 1
+            }
+            apt-get install -y unzip || {
+                error_log "unzip安装失败"
+                return 1
+            }
+            apt-get install -y curl || {
+                error_log "curl安装失败"
+                return 1
+            }
+            apt-get install -y grep sed awk || {
+                error_log "基础工具安装失败"
+                return 1
+            }
+            # 尝试安装fuse3，如果失败则尝试fuse
+            apt-get install -y fuse3 || {
+                warning_log "fuse3安装失败，尝试安装fuse..."
+                apt-get install -y fuse || {
+                    warning_log "fuse也安装失败，将在后续操作中处理"
+                }
+            }
             ;;
         "CentOS")
             # CentOS/RHEL
-            yum install -y wget unzip curl fuse grep sed awk >> "$LOG_FILE" 2>&1
+            yum install -y wget unzip curl fuse grep sed awk || {
+                error_log "CentOS依赖安装失败，尝试清理缓存后重试..."
+                yum clean all
+                yum makecache
+                yum install -y wget unzip curl fuse grep sed awk >> "$LOG_FILE" 2>&1
+            }
             ;;
         "Fedora")
             # Fedora
-            dnf install -y wget unzip curl fuse3 grep sed awk >> "$LOG_FILE" 2>&1
+            dnf install -y wget unzip curl fuse3 grep sed awk || {
+                error_log "Fedora依赖安装失败，尝试清理缓存后重试..."
+                dnf clean all
+                dnf makecache
+                dnf install -y wget unzip curl fuse3 grep sed awk >> "$LOG_FILE" 2>&1
+            }
             ;;
         "Arch")
             # Arch Linux
@@ -111,7 +156,15 @@ install_dependencies() {
             ;;
         "飞牛OS")
             # 飞牛OS (类似Debian)
-            apt-get update -y >> "$LOG_FILE" 2>&1
+            apt-get update -y || {
+                warning_log "初次更新失败，尝试修复apt源..."
+                apt-get clean || true
+                rm -rf /var/lib/apt/lists/* || true
+                apt-get update -y || {
+                    error_log "更新软件包列表失败"
+                    return 1
+                }
+            }
             apt-get install -y wget unzip curl fuse grep sed awk >> "$LOG_FILE" 2>&1
             ;;
         *)
@@ -120,13 +173,22 @@ install_dependencies() {
             ;;
     esac
     
-    if [ $? -eq 0 ]; then
-        success_log "依赖安装成功"
-        return 0
-    else
-        error_log "依赖安装失败"
+    # 即使有部分包安装失败，也检查关键工具是否存在
+    check_command wget || {
+        error_log "关键工具wget缺失"
         return 1
-    fi
+    }
+    check_command unzip || {
+        error_log "关键工具unzip缺失"
+        return 1
+    }
+    check_command curl || {
+        error_log "关键工具curl缺失"
+        return 1
+    }
+    
+    success_log "关键依赖安装成功"
+    return 0
 }
 
 # 安装rclone
