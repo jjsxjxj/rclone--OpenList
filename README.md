@@ -27,14 +27,20 @@
 ### 1. 下载脚本
 
 ```bash
-# 使用GitHub代理下载（推荐国内用户使用）
-wget -O rclone_openlist_mount_linux.sh https://ghproxy.com/https://github.com/jjsxjxj/rclone--OpenList/rclone_openlist_mount_linux.sh
+# 方法1：使用不检查SSL证书的方式（解决SSL连接问题）
+wget -O rclone_openlist_mount_linux.sh --no-check-certificate https://raw.githubusercontent.com/jjsxjxj/rclone--OpenList/main/rclone_openlist_mount_linux.sh
 
-# 直接从GitHub下载（海外用户或不需要代理的用户）
-wget -O rclone_openlist_mount_linux.sh https://github.com/jjsxjxj/rclone--OpenList/rclone_openlist_mount_linux.sh
+# 方法2：使用CDN下载（推荐）
+wget -O rclone_openlist_mount_linux.sh --no-check-certificate https://cdn.jsdelivr.net/gh/jjsxjxj/rclone--OpenList@main/rclone_openlist_mount_linux.sh
+
+# 方法3：尝试其他GitHub代理（如有SSL问题，添加--no-check-certificate参数）
+wget -O rclone_openlist_mount_linux.sh --no-check-certificate https://gh.api.99988866.xyz/https://raw.githubusercontent.com/jjsxjxj/rclone--OpenList/main/rclone_openlist_mount_linux.sh || \
+wget -O rclone_openlist_mount_linux.sh --no-check-certificate https://raw.fastgit.org/jjsxjxj/rclone--OpenList/main/rclone_openlist_mount_linux.sh
 ```
 
-或者直接从GitHub仓库下载完整代码: https://github.com/jjsxjxj/rclone--OpenList
+如果上述方法都失败，您可以手动访问GitHub仓库下载：https://github.com/jjsxjxj/rclone--OpenList
+
+**注意**：如果遇到SSL/TLS连接问题，请在wget命令中添加`--no-check-certificate`参数。
 
 ### 2. 设置执行权限
 
