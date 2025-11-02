@@ -483,13 +483,23 @@ mount_webdav() {
     info_log "验证rclone配置..."
     # 使用更通用的ls命令代替lsd，提高兼容性
     rclone ls openlist: -l --max-depth=1 >> "$LOG_FILE" 2>&1 || {
-        # 如果ls命令也失败，尝试使用listremotes命令检查配置是否存在
-        rclone listremotes | grep -q "^openlist:" >> "$LOG_FILE" 2>&1 || {
-            error_log "rclone配置可能不存在或不正确"
-            echo "详细错误: " >> "$LOG_FILE"
-            rclone listremotes >> "$LOG_FILE" 2>&1
-            return 1
-        }
+        # 检查rclone是否支持listremotes命令
+        if rclone --help | grep -q "listremotes"; then
+            # 如果支持listremotes，使用它检查配置是否存在
+            rclone listremotes | grep -q "^openlist:" >> "$LOG_FILE" 2>&1 || {
+                error_log "rclone配置可能不存在或不正确"
+                echo "详细错误: " >> "$LOG_FILE"
+                rclone listremotes >> "$LOG_FILE" 2>&1
+                return 1
+            }
+        else
+            # 旧版本rclone不支持listremotes，直接检查配置文件是否存在
+            if [ ! -f ~/.config/rclone/rclone.conf ] || ! grep -q "\[openlist\]" ~/.config/rclone/rclone.conf; then
+                error_log "rclone配置可能不存在或不正确"
+                echo "详细错误: 配置文件中未找到openlist远程" >> "$LOG_FILE"
+                return 1
+            fi
+        fi
         # 配置存在但连接失败
         error_log "无法连接到WebDAV服务器，请检查配置信息和网络连接"
         echo "详细错误: " >> "$LOG_FILE"
@@ -794,15 +804,22 @@ main() {
     
     # 加密密码 - 确保在rclone安装后执行
     if command -v rclone > /dev/null 2>&1; then
-        # 使用更安全的方式处理密码加密，捕获可能的错误
-        ENCRYPTION_RESULT=$(rclone obscure "$WEBDAV_PASS" 2>&1)
-        if [ $? -eq 0 ]; then
-            WEBDAV_PASS_ENCRYPTED="$ENCRYPTION_RESULT"
-            info_log "密码加密成功"
+        # 检查rclone是否支持obscure命令
+        if rclone --help | grep -q "obscure"; then
+            # 使用更安全的方式处理密码加密，捕获可能的错误
+            ENCRYPTION_RESULT=$(rclone obscure "$WEBDAV_PASS" 2>&1)
+            if [ $? -eq 0 ]; then
+                WEBDAV_PASS_ENCRYPTED="$ENCRYPTION_RESULT"
+                info_log "密码加密成功"
+            else
+                # 加密失败，使用明文密码但记录警告
+                WEBDAV_PASS_ENCRYPTED="$WEBDAV_PASS"
+                warning_log "rclone obscure加密失败: $ENCRYPTION_RESULT，将使用明文密码"
+            fi
         else
-            # 加密失败，使用明文密码但记录警告
+            # 旧版本rclone不支持obscure命令，直接使用明文密码
             WEBDAV_PASS_ENCRYPTED="$WEBDAV_PASS"
-            warning_log "rclone obscure加密失败: $ENCRYPTION_RESULT，将使用明文密码"
+            info_log "检测到旧版本rclone不支持obscure命令，将使用明文密码"
         fi
     else
         WEBDAV_PASS_ENCRYPTED="$WEBDAV_PASS"
