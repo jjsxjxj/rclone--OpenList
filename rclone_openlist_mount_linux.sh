@@ -82,138 +82,235 @@ detect_os() {
     return 0
 }
 
-# 安装系统依赖
-install_dependencies() {
-    info_log "安装必要依赖..."
+# 安装单个依赖的通用函数（按需安装）
+install_single_dependency() {
+    local tool_name="$1"
+    local package_name="$2"
+    local fallback_package="$3"
+    
+    # 先检查命令是否已存在
+    if check_command "$tool_name"; then
+        info_log "$tool_name 已存在，跳过安装"
+        return 0
+    fi
+    
+    info_log "尝试安装 $package_name..."
     
     case "$OS" in
-        "Debian")
-            # Ubuntu/Debian - 增强的错误处理
-            info_log "正在更新软件包列表..."
+        "Debian"|"飞牛OS")
+            apt-get install -y "$package_name" || {
+                error_log "$package_name 安装失败"
+                
+                # 如果有备选包，尝试安装
+                if [ -n "$fallback_package" ]; then
+                    warning_log "尝试安装备选包 $fallback_package..."
+                    apt-get install -y "$fallback_package" || {
+                        error_log "$fallback_package 安装也失败"
+                        return 1
+                    }
+                    
+                    # 创建符号链接
+                    if [ "$tool_name" != "$fallback_package" ]; then
+                        ln -sf "$(which "$fallback_package")" "/usr/bin/$tool_name" 2>/dev/null || {
+                            warning_log "无法创建 $tool_name 符号链接"
+                        }
+                    fi
+                else
+                    return 1
+                fi
+            }
+            ;;
+        "CentOS")
+            yum install -y "$package_name" || {
+                error_log "$package_name 安装失败"
+                yum clean all
+                yum makecache
+                yum install -y "$package_name" || {
+                    # 尝试备选包
+                    if [ -n "$fallback_package" ]; then
+                        warning_log "尝试安装备选包 $fallback_package..."
+                        yum install -y "$fallback_package" || {
+                            error_log "$fallback_package 安装也失败"
+                            return 1
+                        }
+                    else
+                        return 1
+                    fi
+                }
+            }
+            ;;
+        "Fedora")
+            dnf install -y "$package_name" || {
+                error_log "$package_name 安装失败"
+                dnf clean all
+                dnf makecache
+                dnf install -y "$package_name" || {
+                    # 尝试备选包
+                    if [ -n "$fallback_package" ]; then
+                        warning_log "尝试安装备选包 $fallback_package..."
+                        dnf install -y "$fallback_package" || {
+                            error_log "$fallback_package 安装也失败"
+                            return 1
+                        }
+                    else
+                        return 1
+                    fi
+                }
+            }
+            ;;
+        "Arch")
+            pacman -Sy --noconfirm "$package_name" >> "$LOG_FILE" 2>&1 || {
+                error_log "$package_name 安装失败"
+                # 尝试备选包
+                if [ -n "$fallback_package" ]; then
+                    warning_log "尝试安装备选包 $fallback_package..."
+                    pacman -Sy --noconfirm "$fallback_package" >> "$LOG_FILE" 2>&1 || {
+                        error_log "$fallback_package 安装也失败"
+                        return 1
+                    }
+                else
+                    return 1
+                fi
+            }
+            ;;
+        "OpenWrt")
+            opkg install "$package_name" >> "$LOG_FILE" 2>&1 || {
+                error_log "$package_name 安装失败"
+                # 尝试备选包
+                if [ -n "$fallback_package" ]; then
+                    warning_log "尝试安装备选包 $fallback_package..."
+                    opkg install "$fallback_package" >> "$LOG_FILE" 2>&1 || {
+                        error_log "$fallback_package 安装也失败"
+                        return 1
+                    }
+                else
+                    return 1
+                fi
+            }
+            ;;
+    esac
+    
+    # 最后再次检查命令是否存在
+    if check_command "$tool_name"; then
+        success_log "$tool_name 安装成功"
+        return 0
+    else
+        error_log "$tool_name 安装后仍不可用"
+        return 1
+    fi
+}
+
+# 更新软件包列表的函数
+update_package_lists() {
+    info_log "更新软件包列表..."
+    
+    case "$OS" in
+        "Debian"|"飞牛OS")
             apt-get update -y || {
                 warning_log "初次更新失败，尝试修复apt源..."
-                # 尝试修复常见的apt问题
                 apt-get clean || true
                 rm -rf /var/lib/apt/lists/* || true
                 apt-get update -y || {
                     error_log "更新软件包列表失败，请检查网络连接或源配置"
                     return 1
-                }
-            }
-            
-            info_log "正在安装依赖包..."
-            # 分别安装软件包，增加成功率
-            apt-get install -y wget || {
-                error_log "wget安装失败"
-                return 1
-            }
-            apt-get install -y unzip || {
-                error_log "unzip安装失败"
-                return 1
-            }
-            apt-get install -y curl || {
-                error_log "curl安装失败"
-                return 1
-            }
-            apt-get install -y grep sed awk || {
-                error_log "基础工具安装失败"
-                return 1
-            }
-            # 尝试安装fuse3，如果失败则尝试fuse
-            apt-get install -y fuse3 || {
-                warning_log "fuse3安装失败，尝试安装fuse..."
-                apt-get install -y fuse || {
-                    warning_log "fuse也安装失败，将在后续操作中处理"
                 }
             }
             ;;
         "CentOS")
-            # CentOS/RHEL
-            yum install -y wget unzip curl fuse grep sed awk || {
-                error_log "CentOS依赖安装失败，尝试清理缓存后重试..."
-                yum clean all
-                yum makecache
-                yum install -y wget unzip curl fuse grep sed awk >> "$LOG_FILE" 2>&1
-            }
+            yum clean all
+            yum makecache
             ;;
         "Fedora")
-            # Fedora
-            dnf install -y wget unzip curl fuse3 grep sed awk || {
-                error_log "Fedora依赖安装失败，尝试清理缓存后重试..."
-                dnf clean all
-                dnf makecache
-                dnf install -y wget unzip curl fuse3 grep sed awk >> "$LOG_FILE" 2>&1
-            }
+            dnf clean all
+            dnf makecache
             ;;
         "Arch")
-            # Arch Linux
-            pacman -Sy --noconfirm wget unzip curl fuse3 grep sed awk >> "$LOG_FILE" 2>&1
+            pacman -Sy --noconfirm >> "$LOG_FILE" 2>&1
             ;;
         "OpenWrt")
-            # OpenWrt
             opkg update >> "$LOG_FILE" 2>&1
-            opkg install wget unzip curl grep sed awk >> "$LOG_FILE" 2>&1
-            ;;
-        "飞牛OS")
-            # 飞牛OS (类似Debian)
-            info_log "正在更新软件包列表..."
-            apt-get update -y || {
-                warning_log "初次更新失败，尝试修复apt源..."
-                apt-get clean || true
-                rm -rf /var/lib/apt/lists/* || true
-                apt-get update -y || {
-                    error_log "更新软件包列表失败，请检查网络连接或源配置"
-                    return 1
-                }
-            }
-            
-            info_log "正在安装依赖包..."
-            # 分别安装软件包，增加成功率
-            apt-get install -y wget || {
-                error_log "wget安装失败"
-                return 1
-            }
-            apt-get install -y unzip || {
-                error_log "unzip安装失败"
-                return 1
-            }
-            apt-get install -y curl || {
-                error_log "curl安装失败"
-                return 1
-            }
-            # 对于grep、sed、awk，分别安装并处理可能的找不到候选问题
-            apt-get install -y grep || {
-                warning_log "grep安装失败，检查是否已存在"
-                which grep >/dev/null || error_log "grep不存在"
-            }
-            apt-get install -y sed || {
-                warning_log "sed安装失败，检查是否已存在"
-                which sed >/dev/null || error_log "sed不存在"
-            }
-            # 针对飞牛OS的awk问题，先尝试安装gawk作为替代
-            if ! apt-get install -y gawk; then
-                warning_log "gawk安装失败，检查awk是否已存在"
-                which awk >/dev/null || error_log "awk相关工具不存在"
-            else
-                # 如果安装了gawk，确保有awk命令
-                if ! which awk >/dev/null; then
-                    ln -sf $(which gawk) /usr/bin/awk 2>/dev/null || {
-                        warning_log "无法创建awk符号链接"
-                    }
-                fi
-            fi
-            # 尝试安装fuse
-            apt-get install -y fuse || {
-                warning_log "fuse安装失败"
-            }
-            ;;
-        *)
-            error_log "不支持的系统类型"
-            return 1
             ;;
     esac
     
-    # 即使有部分包安装失败，也检查关键工具是否存在
+    return 0
+}
+
+# 安装系统依赖 - 按需安装模式
+install_dependencies() {
+    info_log "开始按需检查并安装依赖..."
+    
+    # 先更新软件包列表
+    update_package_lists || {
+        warning_log "软件包列表更新失败，尝试继续..."
+    }
+    
+    # 按需安装核心工具
+    install_single_dependency "wget" "wget" || {
+        error_log "关键工具wget安装失败"
+        return 1
+    }
+    
+    install_single_dependency "unzip" "unzip" || {
+        error_log "关键工具unzip安装失败"
+        return 1
+    }
+    
+    install_single_dependency "curl" "curl" || {
+        error_log "关键工具curl安装失败"
+        return 1
+    }
+    
+    # 安装基础工具，允许某些失败但记录警告
+    install_single_dependency "grep" "grep" || warning_log "grep安装失败，将继续尝试其他依赖"
+    install_single_dependency "sed" "sed" || warning_log "sed安装失败，将继续尝试其他依赖"
+    
+    # 特殊处理awk - 尝试多种可能的实现
+    if ! check_command "awk"; then
+        info_log "检测到awk未安装，尝试安装..."
+        # 对于飞牛OS等特殊系统，直接尝试gawk作为首选
+        if [ "$OS" = "飞牛OS" ]; then
+            install_single_dependency "awk" "gawk" || {
+                warning_log "gawk安装失败，尝试其他awk实现..."
+                install_single_dependency "awk" "mawk" || {
+                    warning_log "mawk安装失败，尝试最后一种awk实现..."
+                    install_single_dependency "awk" "original-awk" || {
+                        warning_log "所有awk实现安装失败，将继续运行"
+                    }
+                }
+            }
+            
+            # 如果安装了gawk但没有awk命令，创建符号链接
+            if which gawk >/dev/null && ! which awk >/dev/null; then
+                ln -sf "$(which gawk)" "/usr/bin/awk" 2>/dev/null || {
+                    warning_log "无法创建awk符号链接"
+                }
+            fi
+        else
+            # 其他系统先尝试常规awk包
+            install_single_dependency "awk" "awk" || {
+                warning_log "awk安装失败，尝试gawk..."
+                install_single_dependency "awk" "gawk" || {
+                    warning_log "gawk安装失败，将继续运行"
+                }
+            }
+        fi
+    fi
+    
+    # 安装fuse相关包（尝试fuse3，失败则尝试fuse）
+    if [ "$OS" = "Debian" ] || [ "$OS" = "Fedora" ] || [ "$OS" = "Arch" ]; then
+        install_single_dependency "fuse3" "fuse3" || {
+            warning_log "fuse3安装失败，尝试fuse..."
+            install_single_dependency "fusermount" "fuse" || {
+                warning_log "fuse安装也失败，将在后续操作中处理"
+            }
+        }
+    else
+        install_single_dependency "fusermount" "fuse" || {
+            warning_log "fuse安装失败，将在后续操作中处理"
+        }
+    fi
+    
+    # 最终验证关键工具是否存在
     check_command wget || {
         error_log "关键工具wget缺失"
         return 1
@@ -227,7 +324,7 @@ install_dependencies() {
         return 1
     }
     
-    success_log "关键依赖安装成功"
+    success_log "核心依赖安装成功"
     return 0
 }
 
