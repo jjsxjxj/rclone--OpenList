@@ -536,7 +536,7 @@ mount_webdav() {
             fi
             # 尝试获取更多错误信息
             info_log "尝试获取更详细的挂载错误信息..."
-        rclone mount openlist: "$MOUNT_POINT" \
+            rclone mount openlist: "$MOUNT_POINT" \
             --umask 0000 \
             --allow-non-empty \
             --verbose >> "$LOG_FILE" 2>&1 &
