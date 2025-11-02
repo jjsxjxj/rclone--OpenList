@@ -27,10 +27,14 @@
 ### 1. 下载脚本
 
 ```bash
-wget https://github.com/jjsxjxj/rclone--OpenList/rclone_openlist_mount_linux.sh
+# 使用GitHub代理下载（推荐国内用户使用）
+wget -O rclone_openlist_mount_linux.sh https://ghproxy.com/https://github.com/jjsxjxj/rclone--OpenList/rclone_openlist_mount_linux.sh
+
+# 直接从GitHub下载（海外用户或不需要代理的用户）
+wget -O rclone_openlist_mount_linux.sh https://github.com/jjsxjxj/rclone--OpenList/rclone_openlist_mount_linux.sh
 ```
 
-或者直接从GitHub仓库下载: https://github.com/jjsxjxj/rclone--OpenList
+或者直接从GitHub仓库下载完整代码: https://github.com/jjsxjxj/rclone--OpenList
 
 ### 2. 设置执行权限
 
