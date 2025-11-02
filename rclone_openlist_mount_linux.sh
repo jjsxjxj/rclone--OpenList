@@ -760,13 +760,22 @@ main() {
     fi
     
     # 尝试使用rclone obscure命令加密密码，如果失败则使用明文
-    if rclone obscure "$WEBDAV_PASS" >/dev/null 2>&1; then
-        WEBDAV_PASS_ENCRYPTED=$(rclone obscure "$WEBDAV_PASS")
-        info_log "使用rclone obscure加密密码"
+    # 使用更健壮的错误处理，避免obscure命令失败导致脚本终止
+    WEBDAV_PASS_ENCRYPTED="$WEBDAV_PASS"  # 默认使用明文密码
+    
+    # 检查rclone是否支持obscure命令
+    if rclone help obscure >/dev/null 2>&1; then
+        # 支持obscure命令，尝试加密
+        if encrypted_pass=$(rclone obscure "$WEBDAV_PASS" 2>/dev/null); then
+            WEBDAV_PASS_ENCRYPTED="$encrypted_pass"
+            info_log "使用rclone obscure加密密码"
+        else
+            # 加密失败，使用明文密码并记录警告
+            warning_log "rclone obscure加密命令执行失败，使用明文密码配置rclone"
+        fi
     else
-        # 如果obscure命令失败，直接使用明文密码
-        WEBDAV_PASS_ENCRYPTED="$WEBDAV_PASS"
-        warning_log "rclone obscure加密失败，使用明文密码配置rclone"
+        # rclone不支持obscure命令，使用明文密码
+        warning_log "当前rclone版本不支持obscure命令，使用明文密码配置rclone"
     fi
     
     # 配置rclone
@@ -1042,17 +1051,18 @@ show_menu() {
     while true; do
         # 强制清屏，确保菜单显示干净
         clear
-        echo -e "${GREEN}============================================${NC}"
-        echo -e "${GREEN}      Rclone OpenList WebDAV 管理菜单      ${NC}"
-        echo -e "${GREEN}============================================${NC}"
-        echo -e "${BLUE}1.${NC} 全新安装配置"
-        echo -e "${BLUE}2.${NC} 重新挂载WebDAV"
-        echo -e "${BLUE}3.${NC} 卸载WebDAV"
-        echo -e "${BLUE}4.${NC} 查看挂载状态"
-        echo -e "${BLUE}5.${NC} 查看日志"
-        echo -e "${YELLOW}6.${NC} 更新脚本 (${GREEN}支持多源下载${NC})"
-        echo -e "${BLUE}7.${NC} 退出"
-        echo -e "${GREEN}============================================${NC}"
+        # 使用echo而非echo -e确保所有终端都能正确显示菜单
+        echo "============================================"
+        echo "      Rclone OpenList WebDAV 管理菜单      "
+        echo "============================================"
+        echo "1. 全新安装配置"
+        echo "2. 重新挂载WebDAV"
+        echo "3. 卸载WebDAV"
+        echo "4. 查看挂载状态"
+        echo "5. 查看日志"
+        echo "6. 更新脚本"
+        echo "7. 退出"
+        echo "============================================"
         read -p "请选择操作 [1-7]: " choice
 
         # 清除屏幕以显示操作内容
