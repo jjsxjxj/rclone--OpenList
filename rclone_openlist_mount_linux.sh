@@ -563,6 +563,7 @@ mount_webdav() {
         # 简化检查
         if ! check_command fusermount; then
             warning_log "未找到fusermount命令，可能是fuse安装不完整"
+        fi
         
         return 1
     fi
@@ -619,7 +620,7 @@ After=network.target
 Type=simple
 User=$(whoami)
 ExecStartPre=/bin/sleep 30
-ExecStart=/bin/bash -c '$(command -v rclone) mount openlist: "$MOUNT_POINT" --umask 0000 --allow-non-empty || $(command -v rclone) mount openlist: "$MOUNT_POINT" --umask 0000 --allow-other --allow-non-empty'
+ExecStart=$(command -v rclone) mount openlist: "$MOUNT_POINT" --umask 0000 --allow-non-empty --daemon
 Restart=on-failure
 RestartSec=5
 
@@ -632,7 +633,7 @@ EOF
             systemctl enable rclone-openlist.service
         else
             # 使用init.d - 简化版本
-        cat > "$AUTOSTART_SCRIPT" << EOF
+            cat > "$AUTOSTART_SCRIPT" << EOF
 #!/bin/bash
 
 case "\$1" in
