@@ -759,9 +759,15 @@ main() {
         return 1
     fi
     
-    # 直接使用明文密码，不做任何加密处理
-    WEBDAV_PASS_ENCRYPTED="$WEBDAV_PASS"
-    info_log "使用明文密码配置rclone"
+    # 尝试使用rclone obscure命令加密密码，如果失败则使用明文
+    if rclone obscure "$WEBDAV_PASS" >/dev/null 2>&1; then
+        WEBDAV_PASS_ENCRYPTED=$(rclone obscure "$WEBDAV_PASS")
+        info_log "使用rclone obscure加密密码"
+    else
+        # 如果obscure命令失败，直接使用明文密码
+        WEBDAV_PASS_ENCRYPTED="$WEBDAV_PASS"
+        warning_log "rclone obscure加密失败，使用明文密码配置rclone"
+    fi
     
     # 配置rclone
     if ! configure_rclone; then
@@ -825,7 +831,7 @@ update_script() {
                 break
                 ;;
             3)
-                # 方法3: 尝试多个GitHub代理
+                # 方法3: 尝试多个GitHub代理 - 预设多个更新地址
                 SCRIPT_URL="https://gh.api.99988866.xyz/https://raw.githubusercontent.com/jjsxjxj/rclone--OpenList/main/rclone_openlist_mount_linux.sh"
                 WGET_OPTS="--no-check-certificate"
                 break
@@ -870,24 +876,59 @@ update_script() {
             error_log "wget下载失败"
             echo -e "${RED}错误: wget下载脚本失败${NC}"
             
-            # 如果是方法3，尝试备用代理
-            if [ "$update_choice" = "3" ]; then
-                echo -e "${BLUE}尝试备用GitHub代理...${NC}"
-                SCRIPT_URL="https://raw.fastgit.org/jjsxjxj/rclone--OpenList/main/rclone_openlist_mount_linux.sh"
-                wget -q -O "$TEMP_SCRIPT" $WGET_OPTS "$SCRIPT_URL" || {
-                    error_log "备用代理下载也失败"
-                    echo -e "${RED}错误: 备用代理下载也失败${NC}"
+            # 如果是方法3，尝试多个备用代理地址
+                if [ "$update_choice" = "3" ]; then
+                    # 预设多个备用更新地址
+                    local backup_urls=(
+                        "https://raw.fastgit.org/jjsxjxj/rclone--OpenList/main/rclone_openlist_mount_linux.sh"
+                        "https://ghproxy.com/https://raw.githubusercontent.com/jjsxjxj/rclone--OpenList/main/rclone_openlist_mount_linux.sh"
+                        "https://raw.githubusercontent.com.cnpmjs.org/jjsxjxj/rclone--OpenList/main/rclone_openlist_mount_linux.sh"
+                        "https://cdn.jsdelivr.net/gh/jjsxjxj/rclone--OpenList@main/rclone_openlist_mount_linux.sh"
+                    )
+                    
+                    for backup_url in "${backup_urls[@]}"; do
+                        echo -e "${BLUE}尝试备用代理: ${backup_url}${NC}"
+                        wget -q -O "$TEMP_SCRIPT" $WGET_OPTS "$backup_url" && {
+                            info_log "使用备用代理下载成功: ${backup_url}"
+                            break 2
+                        }
+                        warning_log "备用代理下载失败: ${backup_url}"
+                    done
+                    
+                    # 如果所有备用代理都失败
+                    error_log "所有备用代理下载都失败"
+                    echo -e "${RED}错误: 所有备用代理下载都失败${NC}"
                     return 1
-                }
-            else
-                return 1
-            fi
+                else
+                    return 1
+                fi
         }
     elif check_command curl; then
-        # curl不使用SSL检查选项
+        # curl下载逻辑，先尝试正常下载，失败则尝试不检查SSL
         curl -s -o "$TEMP_SCRIPT" "$SCRIPT_URL" || {
             # 如果失败且支持SSL选项，尝试不检查SSL
             curl -s -k -o "$TEMP_SCRIPT" "$SCRIPT_URL" || {
+                
+                # 如果是方法3，也尝试多个备用代理地址
+                if [ "$update_choice" = "3" ]; then
+                    # 预设多个备用更新地址
+                    local backup_urls=(
+                        "https://raw.fastgit.org/jjsxjxj/rclone--OpenList/main/rclone_openlist_mount_linux.sh"
+                        "https://ghproxy.com/https://raw.githubusercontent.com/jjsxjxj/rclone--OpenList/main/rclone_openlist_mount_linux.sh"
+                        "https://raw.githubusercontent.com.cnpmjs.org/jjsxjxj/rclone--OpenList/main/rclone_openlist_mount_linux.sh"
+                        "https://cdn.jsdelivr.net/gh/jjsxjxj/rclone--OpenList@main/rclone_openlist_mount_linux.sh"
+                    )
+                    
+                    for backup_url in "${backup_urls[@]}"; do
+                        echo -e "${BLUE}尝试备用代理: ${backup_url}${NC}"
+                        curl -s -k -o "$TEMP_SCRIPT" "$backup_url" && {
+                            info_log "使用备用代理下载成功: ${backup_url}"
+                            break 2
+                        }
+                        warning_log "备用代理下载失败: ${backup_url}"
+                    done
+                fi
+                
                 error_log "curl下载失败"
                 echo -e "${RED}错误: curl下载脚本失败${NC}"
                 return 1
@@ -1009,7 +1050,7 @@ show_menu() {
         echo -e "${BLUE}3.${NC} 卸载WebDAV"
         echo -e "${BLUE}4.${NC} 查看挂载状态"
         echo -e "${BLUE}5.${NC} 查看日志"
-        echo -e "${BLUE}6.${NC} 更新脚本"
+        echo -e "${YELLOW}6.${NC} 更新脚本 (${GREEN}支持多源下载${NC})"
         echo -e "${BLUE}7.${NC} 退出"
         echo -e "${GREEN}============================================${NC}"
         read -p "请选择操作 [1-7]: " choice
