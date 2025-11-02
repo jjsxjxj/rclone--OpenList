@@ -18,24 +18,31 @@ LOG_FILE="$(pwd)/rclone_openlist_setup.log"
 > "$LOG_FILE"
 
 # 日志函数
-log() {
+info_log() {
     local message="$1"
     local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
-    echo -e "[$timestamp] $message" | tee -a "$LOG_FILE"
+    echo -e "${BLUE}[$timestamp] 信息: $message${NC}" | tee -a "$LOG_FILE"
 }
 
 # 错误日志函数
 error_log() {
     local message="$1"
     local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
-    echo -e "${RED}[$timestamp] ERROR: $message${NC}" | tee -a "$LOG_FILE"
+    echo -e "${RED}[$timestamp] 错误: $message${NC}" | tee -a "$LOG_FILE"
 }
 
 # 成功日志函数
 success_log() {
     local message="$1"
     local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
-    echo -e "${GREEN}[$timestamp] SUCCESS: $message${NC}" | tee -a "$LOG_FILE"
+    echo -e "${GREEN}[$timestamp] 成功: $message${NC}" | tee -a "$LOG_FILE"
+}
+
+# 警告日志函数
+warning_log() {
+    local message="$1"
+    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    echo -e "${YELLOW}[$timestamp] 警告: $message${NC}" | tee -a "$LOG_FILE"
 }
 
 # 检查命令是否存在
@@ -46,7 +53,7 @@ check_command() {
 
 # 检测系统类型
 detect_os() {
-    log "检测系统类型..."
+    info_log "检测系统类型..."
     
     if [ -f /etc/debian_version ]; then
         OS="Debian"
@@ -71,13 +78,13 @@ detect_os() {
         VER="Unknown"
     fi
     
-    log "系统检测结果: $OS $VER"
+    info_log "系统检测结果: $OS $VER"
     return 0
 }
 
 # 安装系统依赖
 install_dependencies() {
-    log "安装必要依赖..."
+    info_log "安装必要依赖..."
     
     case "$OS" in
         "Debian")
@@ -124,11 +131,11 @@ install_dependencies() {
 
 # 安装rclone
 install_rclone() {
-    log "安装rclone..."
+    info_log "安装rclone..."
     
     # 检查rclone是否已安装
     if check_command rclone; then
-        log "rclone已安装，版本: $(rclone version | grep 'rclone' | head -1)"
+        info_log "rclone已安装，版本: $(rclone version | grep 'rclone' | head -1)"
         return 0
     fi
     
@@ -157,7 +164,7 @@ install_rclone() {
     RCLONE_TEMP_DIR=$(mktemp -d)
     cd "$RCLONE_TEMP_DIR" || return 1
     
-    log "下载rclone for $RCLONE_ARCH..."
+    info_log "下载rclone for $RCLONE_ARCH..."
     wget -q https://downloads.rclone.org/rclone-current-linux-${RCLONE_ARCH}.zip -O rclone.zip >> "$LOG_FILE" 2>&1
     
     if [ $? -ne 0 ]; then
@@ -170,7 +177,7 @@ install_rclone() {
     unzip rclone.zip >> "$LOG_FILE" 2>&1
     cd rclone-*-linux-${RCLONE_ARCH} || return 1
     
-    log "安装rclone..."
+    info_log "安装rclone..."
     # 检测是否为root用户
     if [ $(id -u) -eq 0 ]; then
         install -m 755 rclone /usr/bin/ || return 1
@@ -202,17 +209,26 @@ install_rclone() {
 
 # 配置rclone WebDAV
 configure_rclone() {
-    log "配置rclone WebDAV..."
+    info_log "配置rclone WebDAV..."
     
     # 创建rclone配置目录
     mkdir -p ~/.config/rclone
     
+    # 备份原有配置
+    if [ -f ~/.config/rclone/rclone.conf ]; then
+        cp ~/.config/rclone/rclone.conf ~/.config/rclone/rclone.conf.$(date +%Y%m%d%H%M%S).bak
+        info_log "已备份原有配置文件"
+    fi
+    
+    # 再次确保URL不以斜杠结尾（双重保障）
+    CLEAN_WEBDAV_URL=$(echo "$WEBDAV_URL" | sed 's/\/$//')
+    
     # 创建配置文件
     cat > ~/.config/rclone/rclone.conf << EOF
-[openlist]
+[webdav]
 type = webdav
-url = $WEBDAV_URL
-vendor = generic
+url = $CLEAN_WEBDAV_URL
+vendor = other
 user = $WEBDAV_USER
 pass = $WEBDAV_PASS_ENCRYPTED
 EOF
@@ -228,14 +244,20 @@ EOF
 
 # 创建挂载点
 create_mount_point() {
-    log "创建挂载点: $MOUNT_POINT..."
+    info_log "创建挂载点: $MOUNT_POINT..."
     
     # 检查挂载点是否存在
     if [ ! -d "$MOUNT_POINT" ]; then
-        mkdir -p "$MOUNT_POINT" >> "$LOG_FILE" 2>&1
-        if [ $? -ne 0 ]; then
-            error_log "挂载点创建失败"
+        mkdir -p "$MOUNT_POINT" >> "$LOG_FILE" 2>&1 || {
+            error_log "创建挂载点目录失败"
             return 1
+        }
+        
+        # 设置挂载点权限
+        if [ "$OS" != "OpenWrt" ] && [ "$OS" != "飞牛OS" ]; then
+            chmod 755 "$MOUNT_POINT" >> "$LOG_FILE" 2>&1 || {
+                warning_log "设置挂载点权限失败"
+            }
         fi
     fi
     
@@ -245,16 +267,16 @@ create_mount_point() {
 
 # 挂载WebDAV服务
 mount_webdav() {
-    log "挂载WebDAV服务到 $MOUNT_POINT..."
+    info_log "挂载WebDAV服务到 $MOUNT_POINT..."
     
     # 检查是否已挂载
     if mount | grep -q "$MOUNT_POINT"; then
-        log "检测到$MOUNT_POINT已挂载，先卸载..."
+        info_log "检测到$MOUNT_POINT已挂载，先卸载..."
         umount "$MOUNT_POINT" >> "$LOG_FILE" 2>&1
     fi
     
     # 执行挂载命令
-    rclone mount openlist: "$MOUNT_POINT" \
+    rclone mount webdav: "$MOUNT_POINT" \
         --umask 0000 \
         --default-permissions \
         --allow-non-empty \
@@ -284,14 +306,14 @@ mount_webdav() {
 
 # 设置自动启动
 setup_autostart() {
-    log "设置自动启动..."
+    info_log "设置自动启动..."
     
     # 创建启动脚本
     AUTOSTART_SCRIPT="/etc/init.d/rclone_openlist"
-    
-    if [ $OS = "OpenWrt" ]; then
-        # OpenWrt使用procd
-        cat > "$AUTOSTART_SCRIPT" << 'EOF'
+
+    if [ "$OS" = "OpenWrt" ] || [ "$OS" = "飞牛OS" ]; then
+        # OpenWrt/飞牛OS使用procd
+        cat > "$AUTOSTART_SCRIPT" << EOF
 #!/bin/sh /etc/rc.common
 
 START=99
@@ -299,7 +321,7 @@ STOP=10
 
 start() {
     sleep 30
-    $(command -v rclone) mount openlist: "$MOUNT_POINT" \
+    $(command -v rclone) mount webdav: "$MOUNT_POINT" \
         --umask 0000 \
         --default-permissions \
         --allow-non-empty \
@@ -333,14 +355,14 @@ EOF
             
             cat > "$SYSTEMD_SERVICE" << EOF
 [Unit]
-Description=Rclone OpenList WebDAV Mount
+Description=Rclone WebDAV Mount
 After=network.target
 
 [Service]
 Type=simple
 User=$(whoami)
 ExecStartPre=/bin/sleep 30
-ExecStart=$(command -v rclone) mount openlist: "$MOUNT_POINT" \
+ExecStart=$(command -v rclone) mount webdav: "$MOUNT_POINT" \
     --umask 0000 \
     --default-permissions \
     --allow-non-empty \
@@ -368,7 +390,7 @@ EOF
 case "\$1" in
     start)
         sleep 30
-        $(command -v rclone) mount openlist: "$MOUNT_POINT" \
+        $(command -v rclone) mount webdav: "$MOUNT_POINT" \
             --umask 0000 \
             --default-permissions \
             --allow-non-empty \
@@ -408,7 +430,7 @@ EOF
     fi
     
     # 额外的crontab保障机制
-    CRONTAB_ENTRY="@reboot sleep 60 && $(command -v rclone) mount openlist: \"$MOUNT_POINT\" --umask 0000 --default-permissions --allow-non-empty --allow-other --dir-cache-time 6h --buffer-size 64M --low-level-retries 200 --vfs-read-chunk-size $CHUNK_SIZE --vfs-read-chunk-size-limit 2G --daemon"
+    CRONTAB_ENTRY="@reboot sleep 60 && $(command -v rclone) mount webdav: \"$MOUNT_POINT\" --umask 0000 --default-permissions --allow-non-empty --allow-other --dir-cache-time 6h --buffer-size 64M --low-level-retries 200 --vfs-read-chunk-size $CHUNK_SIZE --vfs-read-chunk-size-limit 2G --daemon"
     
     # 检查crontab是否已存在该条目
     if ! crontab -l 2>/dev/null | grep -q "rclone mount openlist"; then
@@ -468,6 +490,8 @@ main() {
     # 提示用户输入配置信息
     echo -e "${YELLOW}请输入WebDAV配置信息:${NC}"
     read -p "WebDAV地址 (例如: https://example.com/dav): " WEBDAV_URL
+    # 确保URL不以斜杠结尾
+    WEBDAV_URL=$(echo "$WEBDAV_URL" | sed 's/\/$//')
     read -p "WebDAV用户名: " WEBDAV_USER
     read -s -p "WebDAV密码: " WEBDAV_PASS
     echo -e ""
@@ -475,9 +499,6 @@ main() {
     MOUNT_POINT=${MOUNT_POINT:-/mnt/openlist}
     read -p "分片大小 (默认: 64M，可选: 32M/64M/128M/256M): " CHUNK_SIZE
     CHUNK_SIZE=${CHUNK_SIZE:-64M}
-    
-    # 加密密码
-    WEBDAV_PASS_ENCRYPTED=$(rclone obscure "$WEBDAV_PASS" 2>/dev/null || echo "$WEBDAV_PASS")
     
     echo -e ""
     echo -e "${YELLOW}开始安装配置...${NC}"
@@ -493,6 +514,14 @@ main() {
     if ! install_rclone; then
         error_log "rclone安装失败"
         exit 1
+    fi
+    
+    # 加密密码 - 确保在rclone安装后执行
+    if command -v rclone > /dev/null 2>&1; then
+        WEBDAV_PASS_ENCRYPTED=$(rclone obscure "$WEBDAV_PASS" 2>/dev/null || echo "$WEBDAV_PASS")
+    else
+        WEBDAV_PASS_ENCRYPTED="$WEBDAV_PASS"
+        warning_log "无法使用rclone obscure加密密码，将使用明文密码"
     fi
     
     # 配置rclone
@@ -521,11 +550,23 @@ main() {
     # 显示结果
     show_mount_info
     
-    log "脚本执行完成"
+    info_log "脚本执行完成"
 }
 
 # 菜单函数
 show_menu() {
+    # 先检测系统
+    detect_os
+    
+    # 检查权限
+    if [ $(id -u) -ne 0 ] && [ "$OS" != "OpenWrt" ]; then
+        echo -e "${YELLOW}警告: 建议使用root用户运行以获得最佳体验${NC}"
+        read -p "是否继续? (y/n): " continue
+        if [ "$continue" != "y" ]; then
+            exit 0
+        fi
+    fi
+    
     while true; do
         clear
         echo -e "${GREEN}============================================${NC}"
@@ -549,9 +590,9 @@ show_menu() {
                 echo -e "重新挂载WebDAV..."
                 # 读取配置信息
                 if [ -f ~/.config/rclone/rclone.conf ]; then
-                    WEBDAV_URL=$(grep -A 4 "\[openlist\]" ~/.config/rclone/rclone.conf | grep "url =" | cut -d'=' -f2 | tr -d ' ')
-                    WEBDAV_USER=$(grep -A 4 "\[openlist\]" ~/.config/rclone/rclone.conf | grep "user =" | cut -d'=' -f2 | tr -d ' ')
-                    WEBDAV_PASS_ENCRYPTED=$(grep -A 4 "\[openlist\]" ~/.config/rclone/rclone.conf | grep "pass =" | cut -d'=' -f2 | tr -d ' ')
+                    WEBDAV_URL=$(grep -A 4 "\[webdav\]" ~/.config/rclone/rclone.conf | grep "url =" | cut -d'=' -f2 | tr -d ' ')
+                    WEBDAV_USER=$(grep -A 4 "\[webdav\]" ~/.config/rclone/rclone.conf | grep "user =" | cut -d'=' -f2 | tr -d ' ')
+                    WEBDAV_PASS_ENCRYPTED=$(grep -A 4 "\[webdav\]" ~/.config/rclone/rclone.conf | grep "pass =" | cut -d'=' -f2 | tr -d ' ')
                     MOUNT_POINT=$(mount | grep "rclone" | awk '{print $3}' || echo "/mnt/openlist")
                     CHUNK_SIZE="64M" # 默认值
                     
@@ -600,14 +641,7 @@ show_menu() {
     done
 }
 
-# 检查权限
-if [ $(id -u) -ne 0 ] && [ "$OS" != "OpenWrt" ]; then
-    echo -e "${YELLOW}警告: 建议使用root用户运行以获得最佳体验${NC}"
-    read -p "是否继续? (y/n): " continue
-    if [ "$continue" != "y" ]; then
-        exit 0
-    fi
-fi
-
 # 启动菜单
 show_menu
+
+# 检查权限 - 移到show_menu函数内部调用，因为需要先定义OS变量
