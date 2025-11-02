@@ -986,7 +986,7 @@ update_script() {
 show_menu() {
     # 先检测系统
     detect_os
-    
+
     # 检查权限
     if [ $(id -u) -ne 0 ] && [ "$OS" != "OpenWrt" ]; then
         echo -e "${YELLOW}警告: 建议使用root用户运行以获得最佳体验${NC}"
@@ -995,8 +995,9 @@ show_menu() {
             exit 0
         fi
     fi
-    
+
     while true; do
+        # 强制清屏，确保菜单显示干净
         clear
         echo -e "${GREEN}============================================${NC}"
         echo -e "${GREEN}      Rclone OpenList WebDAV 管理菜单      ${NC}"
@@ -1010,14 +1011,20 @@ show_menu() {
         echo -e "${BLUE}7.${NC} 退出"
         echo -e "${GREEN}============================================${NC}"
         read -p "请选择操作 [1-7]: " choice
+
+        # 清除屏幕以显示操作内容
+        clear
+        echo -e "${GREEN}============================================${NC}"
         
         case $choice in
             1)
+                echo -e "${BLUE}正在执行: 全新安装配置${NC}"
+                echo -e "${GREEN}============================================${NC}"
                 main
-                read -p "按Enter键返回菜单..."
                 ;;
             2)
-                echo -e "重新挂载WebDAV..."
+                echo -e "${BLUE}正在执行: 重新挂载WebDAV${NC}"
+                echo -e "${GREEN}============================================${NC}"
                 # 读取配置信息
                 if [ -f ~/.config/rclone/rclone.conf ]; then
                     # 优先查找openlist remote，兼容旧的webdav remote
@@ -1033,49 +1040,51 @@ show_menu() {
                         info_log "使用webdav remote配置"
                     else
                         error_log "未找到openlist或webdav remote配置"
+                        echo -e "${RED}未找到openlist或webdav remote配置${NC}"
                         read -p "按Enter键返回菜单..."
                         continue
                     fi
-                    
+
                     MOUNT_POINT=$(mount | grep "rclone" | awk '{print $3}' || echo "/mnt/openlist")
                     CHUNK_SIZE="64M" # 默认值
-                    
+
                     # 卸载并重新挂载
                     umount "$MOUNT_POINT" 2>/dev/null || true
                     mount_webdav
-                    read -p "按Enter键返回菜单..."
                 else
                     echo -e "${RED}未找到配置文件，请先运行全新安装配置${NC}"
-                    read -p "按Enter键返回菜单..."
                 fi
                 ;;
             3)
-                echo -e "卸载WebDAV..."
+                echo -e "${BLUE}正在执行: 卸载WebDAV${NC}"
+                echo -e "${GREEN}============================================${NC}"
                 MOUNT_POINT=$(mount | grep "rclone" | awk '{print $3}' || echo "/mnt/openlist")
                 if umount "$MOUNT_POINT" 2>/dev/null; then
                     echo -e "${GREEN}卸载成功${NC}"
                 else
                     echo -e "${RED}卸载失败，可能未挂载或权限不足${NC}"
                 fi
-                read -p "按Enter键返回菜单..."
                 ;;
             4)
-                echo -e "挂载状态:"
-                if mount | grep -q "rclone"; then
-                    mount | grep "rclone"
-                else
-                    echo -e "${RED}未检测到rclone挂载${NC}"
-                fi
-                read -p "按Enter键返回菜单..."
+                echo -e "${BLUE}正在执行: 查看挂载状态${NC}"
+                echo -e "${GREEN}============================================${NC}"
+                # 使用更详细的show_mount_info函数替代简单检查
+                show_mount_info
                 ;;
             5)
-                echo -e "查看最近的日志..."
-                tail -n 50 "$LOG_FILE"
-                read -p "按Enter键返回菜单..."
+                echo -e "${BLUE}正在执行: 查看日志${NC}"
+                echo -e "${GREEN}============================================${NC}"
+                echo -e "查看最近的50行日志..."
+                if [ -f "$LOG_FILE" ]; then
+                    tail -n 50 "$LOG_FILE"
+                else
+                    echo -e "${RED}日志文件不存在: $LOG_FILE${NC}"
+                fi
                 ;;
             6)
+                echo -e "${BLUE}正在执行: 更新脚本${NC}"
+                echo -e "${GREEN}============================================${NC}"
                 update_script
-                read -p "按Enter键返回菜单..."
                 ;;
             7)
                 echo -e "${GREEN}谢谢使用，再见！${NC}"
@@ -1083,9 +1092,14 @@ show_menu() {
                 ;;
             *)
                 echo -e "${RED}无效的选择，请重新输入${NC}"
-                read -p "按Enter键继续..."
                 ;;
         esac
+        
+        # 统一的返回菜单提示
+        if [ "$choice" != "7" ]; then
+            echo -e "${GREEN}============================================${NC}"
+            read -p "按Enter键返回菜单..."
+        fi
     done
 }
 
